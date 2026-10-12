@@ -280,18 +280,16 @@ def status_line(*, link: bool) -> None:
 
 
 def resume_card(job: Job, *, selected: bool) -> None:
-    # The key gives the selected card a CSS class to highlight it by (see PAGE_CSS).
+    # The keys give the card CSS classes: the selected one is highlighted, and the others'
+    # buttons are stretched invisibly over the whole card so the card itself is clickable.
     with st.container(border=True, key=f"{'picked' if selected else 'card'}-{job['id']}"):
         st.markdown(f"**{md(job['company'] or 'Unknown company')}**  \n{md(job['title'])}")
         failed = " :red-badge[Check failed]" if job["checks_ok"] == 0 else ""
-        with st.container(horizontal=True, vertical_alignment="center", horizontal_alignment="distribute"):
-            st.markdown(f"{score_badges(job)}{failed}", width="content")
+        st.markdown(f"{score_badges(job)}{failed}")
+        if not selected:
             st.button(
-                "Viewing" if selected else "Open",
+                f"Open {job['company'] or 'resume'}",
                 key=f"open-{job['id']}",
-                icon=":material/visibility:" if selected else None,
-                type="tertiary" if selected else "secondary",
-                disabled=selected,
                 on_click=lambda: st.session_state.update(selected_resume=job["id"]),
             )
 
@@ -1064,6 +1062,12 @@ PROFILE_PAGE = st.Page(profile_page, title="Profile", icon=":material/person:", 
 PAGE_CSS = """<style>
 [data-testid='stMainBlockContainer'] { padding-top: 4rem; }
 [class*='st-key-picked-'] { border-color: #2563eb; background-color: #eff6ff; box-shadow: inset 3px 0 0 #2563eb; }
+[class*='st-key-card-'] { position: relative; transition: border-color 0.1s, background-color 0.1s; }
+[class*='st-key-card-']:hover { border-color: #93c5fd; background-color: #f8fafc; }
+[class*='st-key-card-']:has(button:focus-visible) { outline: 2px solid #2563eb; outline-offset: 2px; }
+[class*='st-key-open-'] { position: absolute; inset: 0; z-index: 1; width: auto; margin: 0; }
+[class*='st-key-open-'] .stButton, [class*='st-key-open-'] button { width: 100%; height: 100%; }
+[class*='st-key-open-'] button { opacity: 0; cursor: pointer; }
 </style>"""
 st.html(PAGE_CSS)
 page = st.navigation([RESUMES_PAGE, JOBS_PAGE, PIPELINE_PAGE, PROFILE_PAGE], position="top")
