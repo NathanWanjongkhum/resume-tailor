@@ -329,12 +329,12 @@ def resume_actions(job: Job, pdf: Path) -> None:
             set_status(job, "approved")
         if (link := safe_link(job)) is not None:
             st.link_button("Posting", link, icon=":material/open_in_new:")
+        if job["status"] != "rejected" and st.button("Reject", icon=f":material/{STATUS_ICONS['rejected']}:"):
+            set_status(job, "rejected")
         with st.popover("More", icon=":material/more_horiz:"):
             st.download_button("Download .tex", (pdf.parent / "resume.tex").read_bytes(), f"{filename}.tex")
             if st.button("Regenerate", help="Write a fresh version (about a minute, uses your plan)"):
                 write_resume(job)
-            if job["status"] != "rejected" and st.button("Reject"):
-                set_status(job, "rejected")
             if job["status"] in {"approved", "applied", "rejected"} and st.button("Back to review"):
                 set_status(job, "generated")
 
