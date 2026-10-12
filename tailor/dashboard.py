@@ -475,9 +475,23 @@ JOB_VIEWS = {
 def jobs_page() -> None:
     show_flash()
     with st.container(horizontal=True, vertical_alignment="bottom", gap="medium"):
-        view = st.segmented_control("Show", list(JOB_VIEWS), default="Scored", required=True, wrap=True) or "Scored"
-        query = st.text_input("Search", placeholder="Company or role")
-        min_score = st.slider("Minimum fit + want + fresh", 3, 15, 9, width=240, disabled=view == "Filtered out")
+        view = (
+            st.segmented_control(
+                "Show", list(JOB_VIEWS), default="Scored", required=True, wrap=True, label_visibility="collapsed"
+            )
+            or "Scored"
+        )
+        query = st.text_input("Search", placeholder="Search company or role", label_visibility="collapsed")
+        min_score = st.slider(
+            "Minimum fit + want + fresh",
+            3,
+            15,
+            9,
+            format="Score ≥ %d",
+            width=240,
+            disabled=view == "Filtered out",
+            label_visibility="collapsed",
+        )
         with st.popover("Add by URL", icon=":material/add_link:"):
             url = st.text_input("Posting URL", placeholder="https://www.linkedin.com/jobs/view/…")
             if url and st.button("Add", type="primary"):
@@ -642,7 +656,6 @@ def run_panel() -> None:
             stage_strip(run)
             live_controls(run)
         else:
-            st.markdown("**Run the pipeline**")
             st.caption("Reads new alert emails, fetches and scores the jobs, then writes resumes for the best ones.")
             idle_controls()
 
@@ -650,7 +663,6 @@ def run_panel() -> None:
 def schedule_card() -> None:
     with st.container(border=True, height="stretch"):
         timer = control.timer_state()
-        st.markdown("**Schedule**")
         on = st.toggle("Run every day at 8:00 AM", value=timer.enabled)
         if on != timer.enabled:
             flash("info", control.set_timer(on=on))
@@ -669,12 +681,11 @@ def failed_card() -> None:
     with st.container(border=True, height="stretch"):
         errored = db.jobs(conn, "error")
         capped = conn.execute("SELECT COUNT(*) FROM jobs WHERE attempts >= ?", (db.MAX_ATTEMPTS,)).fetchone()[0]
-        st.markdown("**Failed jobs**")
         if not errored and not capped:
-            st.caption(":green[:material/check_circle: None.] Jobs that fail are retried on the next run.")
+            st.caption(":green[:material/check_circle: No failed jobs.] Jobs that fail are retried on the next run.")
             return
         st.caption(
-            f":red[:material/error: {len(errored)} waiting for retry] · "
+            f":red[:material/error: {len(errored)} failed jobs waiting for retry] · "
             f"{capped} skipped after {db.MAX_ATTEMPTS} failed attempts"
         )
         if st.button("Retry all now", icon=":material/replay:"):
@@ -695,7 +706,6 @@ def run_note(run: Job) -> str:
 
 
 def history_table() -> None:
-    st.markdown("**History**")
     history = [dict(r) for r in progress.runs(db_conn(), limit=20)]
     if not history:
         st.caption("No runs yet. Runs started here or by the daily timer are listed here.")
@@ -821,7 +831,9 @@ def edit_profile(kind: str, current: str | None, editor_key: str) -> None:
 
 
 def upload_profile(kind: str, updated: str | None) -> None:
-    upload = st.file_uploader(f"Upload {kind}.yaml", type=["yaml", "yml"], key=f"upload-{kind}-{updated}")
+    upload = st.file_uploader(
+        f"Upload {kind}.yaml", type=["yaml", "yml"], key=f"upload-{kind}-{updated}", label_visibility="collapsed"
+    )
     if upload is not None and st.button("Review upload", key=f"review-upload-{kind}", type="primary"):
         try:
             st.session_state[f"review-{kind}"] = upload.getvalue().decode()
@@ -857,7 +869,11 @@ def profile_card(kind: str) -> None:
         older = profile.history(conn, kind)
         modes = ["Edit", "Upload", *(["History"] if older else [])]
         mode = st.segmented_control(
-            "Change", modes, default="Upload" if current is None else "Edit", key=f"mode-{kind}"
+            "Change",
+            modes,
+            default="Upload" if current is None else "Edit",
+            key=f"mode-{kind}",
+            label_visibility="collapsed",
         )
         if mode == "Edit":
             edit_profile(kind, current, f"editor-{kind}-{updated}")  # a fresh editor after each save
