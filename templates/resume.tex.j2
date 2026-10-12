@@ -1,0 +1,162 @@
+%-------------------------
+% Resume in Latex
+% Author : Jake Gutierrez
+% Based off of: https://github.com/sb2nov/resume
+% License : MIT
+%------------------------
+% ATS-friendly copy: flattened nested parentheticals, expanded bare
+% acronyms, and removed stray punctuation from delimited skill lists so
+% autofill parsers stop generating phantom skills.
+%------------------------
+% Jinja template: delimiters are changed so they do not clash with TeX braces
+% (see tailor/render.py). Every interpolated string goes through the `tex` filter.
+%------------------------
+
+\documentclass[letterpaper,11pt]{article}
+
+\usepackage{latexsym}
+\usepackage[empty]{fullpage}
+\usepackage{titlesec}
+\usepackage{marvosym}
+\usepackage[usenames,dvipsnames]{color}
+\usepackage{verbatim}
+\usepackage{enumitem}
+\usepackage[hidelinks]{hyperref}
+\usepackage{fancyhdr}
+\usepackage[english]{babel}
+\usepackage{tabularx}
+\usepackage{iftex}
+\ifPDFTeX\input{glyphtounicode}\fi
+\usepackage{fontawesome5}
+
+\pagestyle{fancy}
+\fancyhf{} % clear all header and footer fields
+\fancyfoot{}
+\renewcommand{\headrulewidth}{0pt}
+\renewcommand{\footrulewidth}{0pt}
+
+% Adjust margins
+\addtolength{\oddsidemargin}{-0.5in}
+\addtolength{\evensidemargin}{-0.5in}
+\addtolength{\textwidth}{1in}
+\addtolength{\topmargin}{-.5in}
+\addtolength{\textheight}{1.0in}
+
+\urlstyle{same}
+
+\raggedbottom
+\raggedright
+\setlength{\tabcolsep}{0in}
+
+% Sections formatting
+\titleformat{\section}{
+  \vspace{-4pt}\scshape\raggedright\large
+}{}{0em}{}[\color{black}\titlerule \vspace{-5pt}]
+
+% Ensure that generate pdf is machine readable/ATS parsable.
+% pdfTeX only; XeTeX (Tectonic) writes Unicode text maps natively.
+\ifPDFTeX\pdfgentounicode=1\fi
+
+%-------------------------
+% Custom commands
+\newcommand{\resumeItem}[1]{
+  \item\small{
+    {#1 \vspace{-2pt}}
+  }
+}
+
+\newcommand{\resumeSubheading}[4]{
+  \vspace{-2pt}\item
+    \begin{tabular*}{0.97\textwidth}[t]{l@{\extracolsep{\fill}}r}
+      \textbf{#1} & #2 \\
+      \textit{\small#3} & \textit{\small #4} \\
+    \end{tabular*}\vspace{-7pt}
+}
+
+\newcommand{\resumeSubSubheading}[2]{
+    \item
+    \begin{tabular*}{0.97\textwidth}{l@{\extracolsep{\fill}}r}
+      \textit{\small#1} & \textit{\small #2} \\
+    \end{tabular*}\vspace{-7pt}
+}
+
+\newcommand{\resumeProjectHeading}[2]{
+    \item
+    \begin{tabular*}{0.97\textwidth}{l@{\extracolsep{\fill}}r}
+      \small#1 & #2 \\
+    \end{tabular*}\vspace{-7pt}
+}
+
+\newcommand{\resumeSubItem}[1]{\resumeItem{#1}\vspace{-4pt}}
+
+\renewcommand\labelitemii{$\vcenter{\hbox{\tiny$\bullet$}}$}
+
+\newcommand{\resumeSubHeadingListStart}{\begin{itemize}[leftmargin=0.15in, label={}]}
+\newcommand{\resumeSubHeadingListEnd}{\end{itemize}}
+\newcommand{\resumeItemListStart}{\begin{itemize}}
+\newcommand{\resumeItemListEnd}{\end{itemize}\vspace{-5pt}}
+
+\begin{document}
+
+((* set c = r.contact *))
+\begin{center}
+    \textbf{\Huge \scshape ((( c.name|tex )))} \\ \vspace{1pt}
+    \small 
+    \faPhone\ ((( c.phone|tex ))) $|$ 
+    \href{mailto:((( c.email )))}{\faEnvelope\ \underline{\strut ((( c.email|tex )))}} $|$ 
+    \href{((( c.linkedin )))}{\faLinkedin\ \underline{\strut linkedin.com}} $|$
+    \href{((( c.github )))}{\faGithub\ \underline{\strut github.com}} \\ \vspace{2pt}
+    \small \faMapMarker*\ ((( c.location|tex )))
+\end{center}
+
+\section{Education}
+  \resumeSubHeadingListStart
+((* for ed in r.education *))
+    \resumeSubheading
+      {((( ed.school|tex )))}{((( ed.location|tex )))}
+      {((( ed.degree|tex )))}{((( ed.dates|tex )))}
+      \resumeItemListStart
+((* for area, courses in ed.coursework.items() *))
+        \resumeItem{((( area|tex ))): ((( courses|tex )))}
+((* endfor *))
+      \resumeItemListEnd
+((* endfor *))
+  \resumeSubHeadingListEnd
+
+\section{Experience}
+  \resumeSubHeadingListStart
+((* for job in r.experience *))
+    \resumeSubheading
+      {((( job.title|tex )))}{((( job.dates|tex )))}
+      {((( job.org|tex )))}{((( job.location|tex )))}
+      \resumeItemListStart
+((* for b in job.bullets *))
+        \resumeItem{((( b|tex )))}
+((* endfor *))
+      \resumeItemListEnd
+((* endfor *))
+  \resumeSubHeadingListEnd
+
+\section{Technical Skills}
+ \begin{itemize}[leftmargin=0.15in, label={}]
+    \small{\item{
+((* for cat, items in r.skills.items() *))
+     \textbf{((( cat|tex )))}{: ((( items|join(", ")|tex )))} \\
+((* endfor *))
+    }}
+ \end{itemize}
+
+\section{Projects}
+    \resumeSubHeadingListStart
+((* for p in r.projects *))
+      \resumeProjectHeading
+          {\textbf{((( p.name|tex )))} $|$ \emph{((( p.stack|join(", ")|tex )))}}{}
+          \resumeItemListStart
+((* for b in p.bullets *))
+            \resumeItem{((( b|tex )))}
+((* endfor *))
+          \resumeItemListEnd
+((* endfor *))
+    \resumeSubHeadingListEnd
+
+\end{document}

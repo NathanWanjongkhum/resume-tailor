@@ -1,0 +1,81 @@
+# Example facts for a fictional candidate. Copy it, replace everything with your
+# own, then upload it: `tailor profile import facts my-facts.yaml` or the
+# dashboard's Profile tab.
+#
+# Every claim a generated resume may make. The LLM may select, reorder, and
+# rephrase these claims; it may not add new facts. Every generated bullet must
+# cite a claim `id`, and every number or technology in it must appear in that
+# claim's text or its entry's `stack`.
+
+contact:
+  name: Alex Rivera
+  phone: 555-0142
+  email: alex.rivera@example.com
+  location: Portland, OR
+  linkedin: https://www.linkedin.com/in/example
+  github: https://github.com/example
+
+education:
+  - school: Example State University
+    location: Portland, OR
+    degree: Bachelor of Science in Computer Science
+    dates: Sep. 2021 -- June 2025
+    coursework:
+      Computer Science: >-
+        Data Structures and Algorithms, Operating Systems, Databases,
+        Distributed Systems, Software Engineering, Machine Learning.
+
+experience:
+  - id: northwind
+    title: Software Engineering Intern
+    org: Northwind Studio
+    location: Remote
+    dates: June 2024 -- Sept. 2024
+    stack: [React, Firebase, Cloud Firestore, TypeScript]
+    claims:
+      - id: nw-platform
+        text: >-
+          Built a full-stack booking platform using React and Firebase,
+          connecting clients and contractors in one workflow.
+      - id: nw-messaging
+        text: >-
+          Implemented real-time messaging on Cloud Firestore with image
+          attachments.
+      - id: nw-auth
+        text: >-
+          Added role-based access control so client and contractor data stay
+          isolated from each other.
+
+projects:
+  - id: img-pipeline
+    name: Serverless Image Pipeline
+    repo: null
+    stack: [Java, AWS Lambda, Amazon S3, Amazon CloudWatch]
+    claims:
+      - id: ip-pipeline
+        text: >-
+          Designed an event-driven pipeline using S3 triggers and AWS Lambda
+          to resize and convert uploaded images.
+      - id: ip-bench
+        text: >-
+          Benchmarked function versions with CloudWatch metrics to compare
+          execution time and cost.
+
+  - id: trail-app
+    name: Trail Conditions App
+    repo: null
+    stack: [Python, Flask, PostgreSQL, Docker]
+    claims:
+      - id: tr-api
+        text: >-
+          Built a Flask API over PostgreSQL for crowd-sourced trail condition
+          reports with photo uploads.
+      - id: tr-docker
+        text: >-
+          Packaged the app and database with Docker Compose for one-command
+          local setup.
+
+skills:
+  Languages: [Python, Java, TypeScript, JavaScript, SQL, HTML, CSS]
+  Frameworks: [React, Flask, Node.js]
+  Tools: [Git, Docker, AWS, Firebase, Linux]

@@ -1,0 +1,20 @@
+[Unit]
+Description=Resume tailor pipeline (ingest, fetch, triage, generate)
+After=network-online.target
+
+[Service]
+# exec, not oneshot: `systemctl --user start` returns right away instead of waiting for
+# the whole run (Ctrl+C on a waiting `start` only stops the waiting, not the run).
+Type=exec
+WorkingDirectory=%h/dev/resume-tailor
+# claude lives in ~/.local/bin; user services don't get your shell's PATH.
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+# The venv's python directly (not `uv run`), so SIGTERM reaches the pipeline itself.
+ExecStart=%h/dev/resume-tailor/.venv/bin/python -m tailor run --trigger timer
+# `systemctl --user stop` sends SIGTERM to the pipeline only: it finishes the job it's
+# on (up to a few minutes for a model call), records the run as stopped, and exits.
+KillMode=mixed
+TimeoutStopSec=300
+Nice=10
+# The Gmail app password comes from the keyring (secret-tool) while you're logged in.
+# For runs without an unlocked keyring, install.sh adds LoadCredentialEncrypted= via a drop-in.

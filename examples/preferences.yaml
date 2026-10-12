@@ -1,0 +1,53 @@
+# Example preferences. Copy it, adjust to your search, then upload it:
+# `tailor profile import preferences my-preferences.yaml` or the dashboard's
+# Profile tab. Triage uses it: hard filters run first, in code, for free;
+# survivors are scored by Claude against `wants` and `avoid`.
+
+gmail:
+  # Gmail search syntax; only matching emails are read (read-only, nothing is marked).
+  query: >-
+    newer_than:14d from:(jobalerts-noreply@linkedin.com OR jobs-noreply@linkedin.com
+    OR ali@hiring.cafe)
+
+hard_filters:
+  # Case-insensitive regexes matched against the job title.
+  title_exclude:
+    - \b(senior|sr\.?|staff|principal|lead|manager|director|head of|architect)\b
+    - \bmid[- ]?(level|senior)\b
+    - \b(iii|iv)\b
+    - \b(accountant|teller|sales|recruiter|nurse|technician)\b
+  company_exclude: []
+  # A job is kept if its location matches any of these, or if location is unknown.
+  # A bare "United States" is how LinkedIn lists US-wide (usually remote) roles;
+  # "Abilene, Texas, United States" should not pass.
+  location_include:
+    - remote
+    - ^(united states|usa|us)$
+    - \bor\b|oregon
+    - portland|beaverton|hillsboro|vancouver, wa
+
+triage:
+  backend: plan            # plan (Claude subscription) or api
+  model: claude-sonnet-5-5  # scoring doesn't need the biggest model
+  effort: low
+  batch_size: 8            # jobs scored per call
+  max_per_run: 24          # ranked in code first; the rest wait for the next run
+  # Scores are 1-5. Jobs at or above both thresholds get a tailored resume, best first
+  # by relevance + desirability + recency (recency is 1-5 from the posting date).
+  min_relevance: 3
+  min_desirability: 3
+
+generate:
+  backend: plan
+  effort: low              # low | medium | high; raise if resume wording gets worse
+  max_per_run: 3           # caps plan usage per pipeline run
+  require_full_posting: true  # skip jobs where only the email summary was available
+
+wants: |
+  Entry-level or new-grad software roles: full-stack web, backend, or cloud.
+  Remote, or on-site/hybrid near Portland, OR.
+  Real engineering work and mentorship over prestige.
+
+avoid: |
+  Roles requiring 3+ years of professional experience, security clearances,
+  or mostly non-engineering work (sales, support, data entry).

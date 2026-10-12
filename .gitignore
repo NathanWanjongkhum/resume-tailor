@@ -1,0 +1,15 @@
+# Python / tooling
+.venv/
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+
+# Local toolchain (setup.sh)
+.bin/
+
+# Runtime state (the database holds your profile) and generated resumes
+data/
+out/
+
+# Claude Code worktrees and local settings
+.claude/

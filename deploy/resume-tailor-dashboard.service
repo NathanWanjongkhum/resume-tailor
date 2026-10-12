@@ -1,0 +1,11 @@
+[Unit]
+Description=Resume tailor review dashboard (http://localhost:8501)
+
+[Service]
+WorkingDirectory=%h/dev/resume-tailor
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=%h/.local/bin/uv run python -m tailor dashboard
+Restart=on-failure
+
+[Install]
+WantedBy=default.target

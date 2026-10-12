@@ -1,0 +1,50 @@
+[project]
+name = "resume-tailor"
+version = "0.1.0"
+description = "Tailor a LaTeX resume to a job posting from a verified facts file."
+requires-python = ">=3.12"
+dependencies = [
+    "anthropic>=0.60",
+    "jinja2>=3.1",
+    "pydantic>=2.7",
+    "pyyaml>=6.0",
+    "streamlit>=1.65.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+    "ruff>=0.17.0",
+    "ty>=0.0.86",
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+extend-exclude = [".bin", "out"]
+
+[tool.ruff.lint]
+select = ["ALL"]
+ignore = [
+    "D100", "D101", "D102", "D103", "D104", "D105", "D107",  # docstrings where they add something, not on every def
+    "D203", "D213",          # pick one of each incompatible docstring-layout pair
+    "CPY001",                # no copyright headers in a personal project
+    "COM812", "ISC001",      # conflict with `ruff format`
+    "S603", "S607",          # subprocess calls go to trusted local tools (claude, pdftotext, git, secret-tool) with argument lists, never a shell
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tailor/__main__.py" = ["T201"]  # it's the CLI; print is its output
+"tests/**" = ["S101", "PLR2004", "INP001", "RUF001"]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.ty.terminal]
+error-on-warning = true
+
+[tool.ty.rules]
+all = "error"
