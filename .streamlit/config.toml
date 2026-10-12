@@ -16,6 +16,8 @@ font = "sans-serif"
 [server]
 headless = true
 address = "127.0.0.1"
+# Serves tailor/static/, where the dashboard puts PDFs for the browser's viewer (preview.py).
+enableStaticServing = true
 
 [browser]
 gatherUsageStats = false

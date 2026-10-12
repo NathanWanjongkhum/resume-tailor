@@ -23,8 +23,9 @@ from streamlit.delta_generator import DeltaGenerator
 # Streamlit runs this file as a script, so make the package importable.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from tailor import control, db, github, llm, pipeline, profile, progress, triage
+from tailor import control, db, github, llm, pipeline, preview, profile, progress, triage
 from tailor.facts import Facts
+from tailor.paths import OUT
 
 Job = dict[str, Any]
 
@@ -84,6 +85,8 @@ GOOD, OK = 4, 3
 ROW_PX = 35
 MAX_TABLE_PX = 760
 MAX_UNSCROLLED_CARDS = 5
+# A letter page fitted to the frame's width, plus the viewer's toolbar.
+PDF_ASPECT = "17 / 23"
 NOON = 12
 
 st.set_page_config(page_title="Resume Tailor", page_icon=":material/description:", layout="wide")
@@ -194,13 +197,27 @@ def launch(*, start_stage: str = "ingest", skip_ingest: bool = False) -> None:
     st.rerun()
 
 
-# `mtime` is unused in the body but is part of the cache key, so a regenerated PDF
-# gets a fresh preview.
-@st.cache_data(show_spinner=False)
-def page_images(pdf: str, mtime: float) -> list[bytes]:  # noqa: ARG001
-    prefix = Path(pdf).with_suffix("")
-    subprocess.run(["pdftoppm", "-r", "110", "-png", pdf, f"{prefix}-preview"], check=True)
-    return [p.read_bytes() for p in sorted(prefix.parent.glob(f"{prefix.name}-preview*.png"))]
+# Once per dashboard process: resumes are never rewritten in place, so a copy only goes
+# stale when its out/ folder is deleted by hand.
+@st.cache_resource(show_spinner=False)
+def prune_previews() -> None:
+    preview.prune(OUT.glob("*/resume.pdf"))
+
+
+def pdf_viewer(pdf: Path) -> None:
+    """The browser's own PDF viewer, so links, zoom and text search work.
+
+    st.iframe can't be used: it sandboxes the frame, and Chrome refuses to show a PDF in a
+    sandboxed frame. The URL is our own static path, never input from a job.
+
+    Both browsers' viewers open a clicked link in the whole tab, and the page can't intercept
+    that (the viewer is another origin, so no navigate event fires); middle-click opens a new tab.
+    """
+    url = preview.publish(pdf)
+    st.markdown(
+        f'<iframe src="{url}" title="Resume PDF" style="width:100%;aspect-ratio:{PDF_ASPECT};border:0"></iframe>',
+        unsafe_allow_html=True,
+    )
 
 
 def report_sections(outdir: Path) -> dict[str, str]:
@@ -353,10 +370,9 @@ def resume_detail(job: Job) -> None:
     if not job["posting_ok"]:
         st.info("Written from the email summary only; the full posting couldn't be fetched.")
     resume_actions(job, pdf)
-    preview, why, checks, posting = st.tabs(["Resume", "Why it fits", "Checks & changes", "Posting"])
-    with preview:
-        for img in page_images(str(pdf), pdf.stat().st_mtime):
-            st.image(img, width="stretch")
+    resume_tab, why, checks, posting = st.tabs(["Resume", "Why it fits", "Checks & changes", "Posting"])
+    with resume_tab:
+        pdf_viewer(pdf)
     with why:
         why_tab(outdir)
     with checks:
@@ -392,6 +408,7 @@ def caught_up(all_scored: list[Job], *, any_resumes: bool) -> None:
 
 def resumes_page() -> None:
     show_flash()
+    prune_previews()
     everything = all_jobs()
     jobs = [j for j in everything if j["outdir"]]
     groups = {

@@ -64,7 +64,8 @@ ignores; when a `# noqa` is truly needed, use the bare code. Comments explain *w
 - **Streamlit**: the pipeline panel is a `st.fragment(run_every=2)` that runs on another
   thread, so use `db_conn()` (one connection per thread), never a module-level connection.
   Buttons that act on a run are keyed by run id. `st.rerun()` drops messages, so use
-  `flash()`.
+  `flash()`. The resume preview is the browser's PDF viewer in a plain iframe (`preview.py`):
+  `st.iframe` sandboxes its frame and Chrome won't show PDFs in sandboxed frames.
 - **Untrusted input**: email and web content flows into prompts and the database. Fetch only
   http(s) (`sources.http_get`), and render only http(s) links. hiring.cafe pages sit behind
   Cloudflare; don't work around it. LinkedIn returns HTTP 429 on bursts, which is what
