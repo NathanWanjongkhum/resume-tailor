@@ -14,6 +14,8 @@ from typing import Any
 
 import pandas as pd
 import streamlit as st
+from pandas.io.formats.style import Styler
+from streamlit.delta_generator import DeltaGenerator
 
 # Streamlit runs this file as a script, so make the package importable.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -33,7 +35,26 @@ STATUS_LABELS = {
     "rejected": "Rejected",
     "error": "Error",
 }
-STATUS_COLORS = {"generated": "blue", "approved": "green", "applied": "violet", "rejected": "gray", "error": "red"}
+STATUS_COLORS = {
+    "new": "gray",
+    "filtered": "gray",
+    "triaged": "blue",
+    "generated": "orange",
+    "approved": "green",
+    "applied": "violet",
+    "rejected": "gray",
+    "error": "red",
+}
+STATUS_ICONS = {
+    "new": "schedule",
+    "filtered": "filter_alt_off",
+    "triaged": "insights",
+    "generated": "rate_review",
+    "approved": "thumb_up",
+    "applied": "send",
+    "rejected": "block",
+    "error": "error",
+}
 STAGE_LABELS = {
     "ingest": "Read Gmail",
     "filter": "Filter",
@@ -41,7 +62,25 @@ STAGE_LABELS = {
     "triage": "Score jobs",
     "generate": "Write resumes",
 }
-RUN_ICONS = {"done": "✅", "stopped": "⏹️", "failed": "❌", "interrupted": "⚠️", "running": "▶️"}
+RUN_MARKS = {
+    "done": ":green[:material/check_circle:]",
+    "stopped": ":gray[:material/stop_circle:]",
+    "failed": ":red[:material/error:]",
+    "interrupted": ":orange[:material/warning:]",
+    "running": ":blue[:material/sync:]",
+}
+# Table cells can't hold markdown, so dataframes signal with cell colors (text, background).
+CELL_COLORS = {
+    "green": ("#166534", "#dcfce7"),
+    "orange": ("#9a3412", "#ffedd5"),
+    "red": ("#991b1b", "#fee2e2"),
+    "gray": ("#4b5563", "#f3f4f6"),
+}
+RUN_COLORS = {"done": "green", "stopped": "gray", "failed": "red", "interrupted": "orange", "running": "gray"}
+GOOD, OK = 4, 3
+ROW_PX = 35
+MAX_TABLE_PX = 760
+MAX_UNSCROLLED_CARDS = 5
 NOON = 12
 
 st.set_page_config(page_title="Resume Tailor", page_icon=":material/description:", layout="wide")
@@ -168,15 +207,40 @@ def report_sections(outdir: Path) -> dict[str, str]:
     return {parts[i].strip(): parts[i + 1].strip() for i in range(1, len(parts) - 1, 2)}
 
 
+def level_color(value: int) -> str:
+    """A 1-5 score's color, so a weak score stands out from a strong one."""
+    return "green" if value >= GOOD else "orange" if value == OK else "red"
+
+
+def cell_style(color: str | None) -> str:
+    if color is None:
+        return ""
+    text, background = CELL_COLORS[color]
+    return f"color: {text}; background-color: {background}"
+
+
 def score_badges(job: Job) -> str:
     if job["relevance"] is None:
         return ""
-    fit, want, fresh = job["relevance"], job["desirability"], triage.recency(job["posted_at"])
-    return f":blue-badge[Fit {fit}/5] :green-badge[Want {want}/5] :orange-badge[Fresh {fresh}/5]"
+    scores = {"Fit": job["relevance"], "Want": job["desirability"], "Fresh": triage.recency(job["posted_at"])}
+    return " ".join(f":{level_color(value)}-badge[{name} {value}/5]" for name, value in scores.items())
 
 
 def status_badge(status: str) -> str:
-    return f":{STATUS_COLORS.get(status, 'gray')}-badge[{STATUS_LABELS.get(status, status)}]"
+    icon = f":material/{STATUS_ICONS[status]}: " if status in STATUS_ICONS else ""
+    return f":{STATUS_COLORS.get(status, 'gray')}-badge[{icon}{STATUS_LABELS.get(status, status)}]"
+
+
+def empty_state(icon: str, color: str, title: str, body: str) -> DeltaGenerator:
+    """A centered card for an empty view that says why it's empty and what to do next.
+
+    Returns a centered row for the caller's next-step links.
+    """
+    with st.container(border=True, horizontal_alignment="center", gap="small"):
+        st.markdown(f"## :{color}[:material/{icon}:]", width="content")
+        st.markdown(f"**{title}**", width="content")
+        st.caption(body, width="content")
+        return st.container(horizontal=True, horizontal_alignment="center", gap="medium")
 
 
 def job_heading(job: Job) -> None:
@@ -204,7 +268,8 @@ def status_line(*, link: bool) -> None:
         timer = control.timer_state()
         parts = [f"Last run {last[0]['status']} {local_time(last[0]['finished_at'])}"] if last else []
         parts.append(f"next {systemd_time(timer.next_run)}" if timer.enabled else "daily run off")
-        text = f":gray[{' · '.join(parts)}]"
+        mark = RUN_MARKS.get(last[0]["status"], "") if last else ""
+        text = f"{mark} :gray[{' · '.join(parts)}]"
     with st.container(horizontal=True, vertical_alignment="center", horizontal_alignment="right", gap="medium"):
         st.markdown(text, width="content")
         if link:
@@ -212,7 +277,8 @@ def status_line(*, link: bool) -> None:
 
 
 def resume_card(job: Job, *, selected: bool) -> None:
-    with st.container(border=True):
+    # The key gives the selected card a CSS class to highlight it by (see PAGE_CSS).
+    with st.container(border=True, key=f"{'picked' if selected else 'card'}-{job['id']}"):
         st.markdown(f"**{md(job['company'] or 'Unknown company')}**  \n{md(job['title'])}")
         failed = " :red-badge[Check failed]" if job["checks_ok"] == 0 else ""
         with st.container(horizontal=True, vertical_alignment="center", horizontal_alignment="distribute"):
@@ -298,46 +364,71 @@ def resume_detail(job: Job) -> None:
         st.text(job["posting"] or job["summary"] or "(none)")
 
 
+def next_run_note() -> str:
+    timer = control.timer_state()
+    if not timer.enabled:
+        return "The daily run is off, so new resumes come only from runs you start."
+    cap = triage.load_prefs()["generate"]["max_per_run"]
+    return f"The next run, {systemd_time(timer.next_run)}, writes up to {cap} for the best new jobs."
+
+
+def caught_up(all_scored: list[Job], *, any_resumes: bool) -> None:
+    """The Resumes page with nothing waiting for review."""
+    waiting = [j for j in all_scored if j["status"] == "triaged"]
+    if any_resumes:
+        title, icon, color = "All caught up", "task_alt", "green"
+        body = "No resumes are waiting for review."
+    else:
+        title, icon, color = "No resumes yet", "description", "blue"
+        body = "Resumes appear here once the pipeline writes them."
+    if waiting:
+        body += f" {len(waiting)} scored jobs don't have one yet."
+    with empty_state(icon, color, title, f"{body} {next_run_note()}"):
+        if waiting:
+            st.page_link(JOBS_PAGE, label="Pick a scored job", icon=":material/work:", width="content")
+        st.page_link(PIPELINE_PAGE, label="Run the pipeline", icon=":material/play_arrow:", width="content")
+
+
 def resumes_page() -> None:
     show_flash()
-    jobs = [j for j in all_jobs() if j["outdir"]]
-    if not jobs:
-        st.info("No resumes yet. Run the pipeline, or pick a job in **Jobs** and write one.")
-        return
+    everything = all_jobs()
+    jobs = [j for j in everything if j["outdir"]]
     groups = {
         "To review": [j for j in jobs if j["status"] == "generated"],
         "Approved": [j for j in jobs if j["status"] == "approved"],
         "Applied": [j for j in jobs if j["status"] == "applied"],
         "Rejected": [j for j in jobs if j["status"] == "rejected"],
     }
-    left, right = st.columns([1, 2.4], gap="large")
-    with left:
-        options = [name for name, items in groups.items() if items or name == "To review"]
+    options = [name for name, items in groups.items() if items or name == "To review"]
+    if len(options) > 1:
         group = st.segmented_control(
             "Show",
             options,
             default="To review",
+            required=True,
+            wrap=True,
             format_func=lambda g: f"{g} {len(groups[g])}",
             label_visibility="collapsed",
         )
-        shown = sorted(groups[group or "To review"], key=score, reverse=True)
-        if st.session_state.get("selected_resume") not in {j["id"] for j in shown} and shown:
-            st.session_state["selected_resume"] = shown[0]["id"]
-        with st.container(height=780, border=False):
-            if not shown:
-                st.caption("Nothing here yet.")
-            for job in shown:
-                resume_card(job, selected=job["id"] == st.session_state.get("selected_resume"))
+    else:
+        group = "To review"
+    shown = sorted(groups[group or "To review"], key=score, reverse=True)
+    if not shown:
+        caught_up(everything, any_resumes=bool(jobs))
+        return
+    if st.session_state.get("selected_resume") not in {j["id"] for j in shown}:
+        st.session_state["selected_resume"] = shown[0]["id"]
+    left, right = st.columns([1, 2.4], gap="large")
+    with left, st.container(height=780 if len(shown) > MAX_UNSCROLLED_CARDS else "content", border=False):
+        for job in shown:
+            resume_card(job, selected=job["id"] == st.session_state["selected_resume"])
     with right:
-        selected = next((j for j in shown if j["id"] == st.session_state.get("selected_resume")), None)
-        if selected is None:
-            st.caption("Pick a resume on the left.")
-        else:
-            resume_detail(selected)
+        resume_detail(next(j for j in shown if j["id"] == st.session_state["selected_resume"]))
 
 
 def job_notes(job: Job) -> None:
-    st.markdown(f"{status_badge(job['status'])} {score_badges(job)}")
+    email_only = "" if job["posting_ok"] else " :orange-badge[:material/mail: Email summary only]"
+    st.markdown(f"{status_badge(job['status'])} {score_badges(job)}{email_only}")
     if job["triage"]:
         t = json.loads(job["triage"])
         st.markdown(md(t["reasons"]))
@@ -347,8 +438,6 @@ def job_notes(job: Job) -> None:
         st.caption(md(f"Filtered out: {job['filter_reason']}"))
     if job["error"]:
         st.error(job["error"])
-    if not job["posting_ok"]:
-        st.caption("Only the email summary is available for this posting.")
 
 
 def job_detail(job: Job) -> None:
@@ -369,7 +458,7 @@ def job_detail(job: Job) -> None:
             write_resume(job)
         if (link := safe_link(job)) is not None:
             st.link_button("Posting", link, icon=":material/open_in_new:")
-        if job["status"] not in {"rejected", "filtered"} and st.button("Not interested"):
+        if job["status"] not in {"rejected", "filtered"} and st.button("Not interested", icon=":material/block:"):
             set_status(job, "rejected")
     with st.expander("Posting text"):
         st.text(job["posting"] or job["summary"] or "(none)")
@@ -386,7 +475,7 @@ JOB_VIEWS = {
 def jobs_page() -> None:
     show_flash()
     with st.container(horizontal=True, vertical_alignment="bottom", gap="medium"):
-        view = st.segmented_control("Show", list(JOB_VIEWS), default="Scored") or "Scored"
+        view = st.segmented_control("Show", list(JOB_VIEWS), default="Scored", required=True, wrap=True) or "Scored"
         query = st.text_input("Search", placeholder="Company or role")
         min_score = st.slider("Minimum fit + want + fresh", 3, 15, 9, width=240, disabled=view == "Filtered out")
         with st.popover("Add by URL", icon=":material/add_link:"):
@@ -404,37 +493,26 @@ def jobs_page() -> None:
     ]
     shown.sort(key=score, reverse=True)
     if not shown:
-        st.info("No jobs match. Lower the minimum score or change the view.")
+        hint = "Lower the minimum score, clear the search, or change the view."
+        with empty_state("search_off", "gray", "No jobs match", hint):
+            st.page_link(PIPELINE_PAGE, label="Find new jobs", icon=":material/play_arrow:", width="content")
         return
-    left, right = st.columns([1.6, 1], gap="large")
+    left, right = st.columns([2, 1], gap="large")
     with left:
-        table = pd.DataFrame(
-            [
-                {
-                    "Fit": j["relevance"],
-                    "Want": j["desirability"],
-                    "Fresh": triage.recency(j["posted_at"]),
-                    "Company": j["company"],
-                    "Role": j["title"],
-                    "Location": j["location"],
-                    **({"Status": STATUS_LABELS.get(j["status"], j["status"])} if view == "All" else {}),
-                    "": "" if j["posting_ok"] else "summary only",
-                }
-                for j in shown
-            ]
-        )
         picked = st.dataframe(
-            table,
+            jobs_table(shown, with_status=view == "All"),
             hide_index=True,
-            height=760,
+            height=min(MAX_TABLE_PX, ROW_PX * (len(shown) + 1) + 3),
             on_select="rerun",
             selection_mode="single-row",
             column_config={
-                "Fit": st.column_config.NumberColumn(format="%d", width="small"),
-                "Want": st.column_config.NumberColumn(format="%d", width="small"),
-                "Fresh": st.column_config.NumberColumn(format="%d", width="small"),
-                "Role": st.column_config.TextColumn(width="medium"),
-                "Location": st.column_config.TextColumn(width="small"),
+                "Fit": st.column_config.NumberColumn(width=48, help="How well you match the role, 1-5"),
+                "Want": st.column_config.NumberColumn(width=56, help="How much it matches your wants, 1-5"),
+                "Fresh": st.column_config.NumberColumn(width=56, help="How recently it was posted, 1-5"),
+                "Company": st.column_config.TextColumn(width=140),
+                "Role": st.column_config.TextColumn(width=260),
+                "Location": st.column_config.TextColumn(width=130),
+                "Posting": st.column_config.TextColumn(width=96, help="Email only: the full posting wasn't fetched"),
             },
         )
     with right:
@@ -442,7 +520,39 @@ def jobs_page() -> None:
         if rows:
             job_detail(shown[rows[0]])
         else:
-            st.caption(f"{len(shown)} jobs. Select one to see why it scored that way, or to write a resume.")
+            body = "Select a row to see why it scored that way, or to write a resume for it."
+            empty_state("left_click", "blue", f"{len(shown)} jobs", body)
+
+
+def short_location(location: str | None) -> str:
+    """LinkedIn spells out the country on nearly every job; drop it so the city fits."""
+    if location is None:
+        return ""
+    return re.sub(r",\s*United States$", "", location).replace("United States", "US")
+
+
+def jobs_table(jobs: list[Job], *, with_status: bool) -> Styler:
+    """The jobs as a styled table: scores colored by level, so weak ones stand out."""
+    table = pd.DataFrame(
+        [
+            {
+                "Fit": j["relevance"],
+                "Want": j["desirability"],
+                "Fresh": triage.recency(j["posted_at"]),
+                "Company": j["company"],
+                "Role": j["title"],
+                "Location": short_location(j["location"]),
+                **({"Status": STATUS_LABELS.get(j["status"], j["status"])} if with_status else {}),
+                "Posting": "" if j["posting_ok"] else "Email only",
+            }
+            for j in jobs
+        ]
+    ).astype({"Fit": "Int64", "Want": "Int64", "Fresh": "Int64"})
+    scores = ["Fit", "Want", "Fresh"]
+    styled = table.style.map(lambda v: cell_style(None if pd.isna(v) else level_color(int(v))), subset=scores)
+    styled = styled.map(lambda v: cell_style("orange" if v else None), subset=["Posting"])
+    styled.format(na_rep="", subset=scores)
+    return styled
 
 
 def stage_strip(run: Job) -> None:
@@ -456,10 +566,10 @@ def stage_strip(run: Job) -> None:
             if i < first or (name == "ingest" and "skip_ingest" in args):
                 st.caption(f":material/skip_next: {STAGE_LABELS[name]}  \nskipped")
             elif i < current or (i == current and run["status"] == "done"):
-                st.caption(f":material/check_circle: {STAGE_LABELS[name]}  \n{duration(seconds.get(name, 0))}")
+                st.caption(f":green[:material/check_circle:] {STAGE_LABELS[name]}  \n{duration(seconds.get(name, 0))}")
             elif i == current:
                 state = "in progress" if run["status"] == "running" else run["status"]
-                st.markdown(f"{RUN_ICONS.get(run['status'], '▶️')} **{STAGE_LABELS[name]}**  \n:gray[{state}]")
+                st.markdown(f"{RUN_MARKS.get(run['status'], '')} **{STAGE_LABELS[name]}**  \n:gray[{state}]")
             else:
                 st.caption(f":material/radio_button_unchecked: {STAGE_LABELS[name]}")
 
@@ -538,7 +648,7 @@ def run_panel() -> None:
 
 
 def schedule_card() -> None:
-    with st.container(border=True):
+    with st.container(border=True, height="stretch"):
         timer = control.timer_state()
         st.markdown("**Schedule**")
         on = st.toggle("Run every day at 8:00 AM", value=timer.enabled)
@@ -546,8 +656,9 @@ def schedule_card() -> None:
             flash("info", control.set_timer(on=on))
             st.rerun()
         prefs = triage.load_prefs()
+        next_run = systemd_time(timer.next_run) if timer.enabled else ":orange[:material/pause_circle: off]"
         st.caption(
-            f"Next: {systemd_time(timer.next_run) if timer.enabled else 'off'} · "
+            f"Next: {next_run} · "
             f"up to {prefs['generate']['max_per_run']} resumes per run · "
             f"effort: {prefs['triage']['effort']} scoring, {prefs['generate'].get('effort', 'high')} writing"
         )
@@ -555,15 +666,18 @@ def schedule_card() -> None:
 
 def failed_card() -> None:
     conn = db_conn()
-    with st.container(border=True):
+    with st.container(border=True, height="stretch"):
         errored = db.jobs(conn, "error")
         capped = conn.execute("SELECT COUNT(*) FROM jobs WHERE attempts >= ?", (db.MAX_ATTEMPTS,)).fetchone()[0]
         st.markdown("**Failed jobs**")
         if not errored and not capped:
-            st.caption("None. Jobs that fail are retried automatically on the next run.")
+            st.caption(":green[:material/check_circle: None.] Jobs that fail are retried on the next run.")
             return
-        st.caption(f"{len(errored)} waiting for retry · {capped} skipped after {db.MAX_ATTEMPTS} failed attempts")
-        if st.button("Retry all now"):
+        st.caption(
+            f":red[:material/error: {len(errored)} waiting for retry] · "
+            f"{capped} skipped after {db.MAX_ATTEMPTS} failed attempts"
+        )
+        if st.button("Retry all now", icon=":material/replay:"):
             capped_sql = "UPDATE jobs SET status = 'error' WHERE attempts >= ? AND status = 'triaged'"
             conn.execute(capped_sql, (db.MAX_ATTEMPTS,))
             n = pipeline.retry_errors(conn, reset_attempts=True)
@@ -584,25 +698,35 @@ def history_table() -> None:
     st.markdown("**History**")
     history = [dict(r) for r in progress.runs(db_conn(), limit=20)]
     if not history:
-        st.caption("No runs yet.")
+        st.caption("No runs yet. Runs started here or by the daily timer are listed here.")
         return
+    table = pd.DataFrame(
+        [
+            {
+                "Run": r["id"],
+                "Result": r["status"],
+                "Started": local_time(r["started_at"]),
+                "Took": duration(ago(r["started_at"]) - ago(r["finished_at"])) if r["finished_at"] else "",
+                "By": r["trigger"],
+                "Done": ", ".join(f"{k} {v}" for k, v in json.loads(r["stats"] or "{}").items()),
+                "Note": run_note(r),
+            }
+            for r in history
+        ]
+    )
     st.dataframe(
-        pd.DataFrame(
-            [
-                {
-                    "Run": r["id"],
-                    "Result": f"{RUN_ICONS.get(r['status'], '')} {r['status']}",
-                    "Started": local_time(r["started_at"]),
-                    "Took": duration(ago(r["started_at"]) - ago(r["finished_at"])) if r["finished_at"] else "",
-                    "By": r["trigger"],
-                    "Done": ", ".join(f"{k} {v}" for k, v in json.loads(r["stats"] or "{}").items()),
-                    "Note": run_note(r),
-                }
-                for r in history
-            ]
-        ),
+        table.style.map(lambda v: cell_style(RUN_COLORS.get(v)), subset=["Result"]),
         hide_index=True,
         width="stretch",
+        column_config={
+            "Run": st.column_config.NumberColumn(width=56),
+            "Result": st.column_config.TextColumn(width=104),
+            "Started": st.column_config.TextColumn(width=120),
+            "Took": st.column_config.TextColumn(width=80),
+            "By": st.column_config.TextColumn(width=96),
+            "Done": st.column_config.TextColumn(width="large"),
+            "Note": st.column_config.TextColumn(width="large"),
+        },
     )
 
 
@@ -720,7 +844,8 @@ def profile_card(kind: str) -> None:
     conn = db_conn()
     current, updated = profile.get(conn, kind), profile.updated_at(conn, kind)
     with st.container(border=True):
-        st.markdown(f"**{kind.capitalize()}**")
+        saved = ":green-badge[:material/check: Saved]" if current is not None else ":orange-badge[Missing]"
+        st.markdown(f"**{kind.capitalize()}** {saved}")
         st.caption(f"{PROFILE_HELP[kind]} Last saved: {upload_date(updated)}.")
         if current is None:
             st.warning(
@@ -818,8 +943,13 @@ JOBS_PAGE = st.Page(needs_profile(jobs_page), title="Jobs", icon=":material/work
 PIPELINE_PAGE = st.Page(needs_profile(pipeline_page), title="Pipeline", icon=":material/settings:", url_path="pipeline")
 PROFILE_PAGE = st.Page(profile_page, title="Profile", icon=":material/person:", url_path="profile")
 
-# Less empty space above the content than Streamlit's default.
-st.html("<style>[data-testid='stMainBlockContainer'] { padding-top: 4rem; }</style>")
+# Less empty space above the content than Streamlit's default, and a highlight for the
+# selected resume card (its container key starts with "picked-").
+PAGE_CSS = """<style>
+[data-testid='stMainBlockContainer'] { padding-top: 4rem; }
+[class*='st-key-picked-'] { border-color: #2563eb; background-color: #eff6ff; box-shadow: inset 3px 0 0 #2563eb; }
+</style>"""
+st.html(PAGE_CSS)
 page = st.navigation([RESUMES_PAGE, JOBS_PAGE, PIPELINE_PAGE, PROFILE_PAGE], position="top")
 status_line(link=page.title != PIPELINE_PAGE.title)
 page.run()
