@@ -318,6 +318,30 @@ def test_recency_buckets() -> None:
     assert triage.recency(None, now) == 1
 
 
+def test_years_required() -> None:
+    assert triage.years_required("- 2 to 6 years of experience in robotics") == 2
+    assert triage.years_required("Minimum of three years experience developing apps") == 3
+    assert triage.years_required("- Consultant II: 1+ years of experience\n- Sr.: 3+ years of experience") == 1
+    assert triage.years_required("2+ years of experience with Rust preferred") is None
+    assert triage.years_required("In lieu of degree, 4 years of experience") is None
+    assert triage.years_required("A 4-year degree. Founded 20 years ago.") is None
+    prefs = load_prefs()
+    job = {"title": "Software Engineer", "location": "Remote", "posting": "- 2+ years of professional experience"}
+    assert hard_filter(job, prefs) == "requires 2+ years of experience"
+    assert hard_filter({**job, "posting": "- 1+ years of experience"}, prefs) == "requires 1+ years of experience"
+    assert hard_filter({**job, "posting": "- 0-2 years of experience"}, prefs) is None
+
+
+def test_generate_drops_awaiting_jobs_whose_posting_closed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    conn = db.connect(tmp_path / "jobs.db")
+    for n, status in [(1, "generated"), (2, "approved"), (3, "applied")]:
+        db.add_job(conn, id=f"t:{n}", source="test", title=f"Dev {n}", company="A", posting="x", posting_ok=1)
+        db.update(conn, f"t:{n}", status=status)
+    monkeypatch.setattr(sources, "still_open", lambda job: job["id"] == "t:2")
+    pipeline.generate(conn, load_prefs(), Facts())
+    assert [db.get_required(conn, f"t:{n}")["status"] for n in (1, 2, 3)] == ["filtered", "approved", "applied"]
+
+
 def test_closed_linkedin_posting_is_filtered(monkeypatch: pytest.MonkeyPatch) -> None:
     page = '<h2 class="top-card-layout__title">Dev</h2><figure class="closed-job">No longer accepting applications'
     monkeypatch.setattr(sources, "http_get", lambda _url: ("", page))

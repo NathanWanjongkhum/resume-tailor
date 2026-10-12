@@ -92,7 +92,9 @@ class Tracker(Progress):
 
     def _close_stage(self) -> None:
         if self._stage is not None:
-            self.seconds[self._stage] = round(time.monotonic() - self._stage_t0, 1)
+            # A stage can report in steps (generate checks open postings first), so add up.
+            elapsed = self.seconds.get(self._stage, 0) + time.monotonic() - self._stage_t0
+            self.seconds[self._stage] = round(elapsed, 1)
 
     @override
     def stage(self, name: str, total: int | None) -> None:

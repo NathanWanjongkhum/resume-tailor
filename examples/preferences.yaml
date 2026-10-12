@@ -17,6 +17,10 @@ hard_filters:
     - \b(iii|iv)\b
     - \b(accountant|teller|sales|recruiter|nurse|technician)\b
   company_exclude: []
+  # Postings whose minimum years of experience is above this are excluded once the
+  # full posting is fetched; 0 keeps only roles that ask for none. Leave it out to
+  # keep them all.
+  max_years_required: 0
   # A job is kept if its location matches any of these, or if location is unknown.
   # A bare "United States" is how LinkedIn lists US-wide (usually remote) roles;
   # "Abilene, Texas, United States" should not pass.

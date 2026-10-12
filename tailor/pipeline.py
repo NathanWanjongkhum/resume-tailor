@@ -256,20 +256,43 @@ def generate_one(
     return outdir
 
 
+def close_awaiting(conn: sqlite3.Connection, p: Progress) -> int:
+    """Filter out resumes you haven't applied with yet whose postings have since closed.
+
+    New-grad postings often close within days, before the resume is reviewed.
+    """
+    rows = [*db.jobs(conn, "generated"), *db.jobs(conn, "approved")]
+    p.stage("generate", len(rows))
+    closed = 0
+    for row in rows:
+        p.item(f"still open? {_label(row)}")
+        if sources.still_open(dict(row)) is False:
+            db.update(conn, row["id"], **sources.CLOSED)
+            log.info("generate: %s (%s) closed before you applied", row["id"], row["status"])
+            closed += 1
+        p.advance()
+    return closed
+
+
 def generate(conn: sqlite3.Connection, prefs: triage.Prefs, facts: Facts, p: Progress | None = None) -> int:
     p = p or Progress()
     via = llm.backend(prefs["generate"]["backend"])
     effort = llm.effort(prefs["generate"].get("effort", "high"))
     cap = prefs["generate"]["max_per_run"]
+    close_awaiting(conn, p)
     rows = queue(conn, prefs)
     p.stage("generate", min(cap, len(rows)))
     tried = done = 0
     # Walk down the ranking until `cap` jobs went to Claude, skipping postings that closed
-    # since they were fetched (a free page check, so a closed job never costs a call).
+    # since they were fetched (a free page check, so a closed job never costs a call),
+    # and ones triaged before a hard filter was added or changed.
     for row in rows:
         if tried == cap:
             break
         p.item(_label(row))
+        if (reason := triage.hard_filter(dict(row), prefs)) is not None:
+            db.update(conn, row["id"], status="filtered", filter_reason=reason)
+            continue
         is_open = sources.still_open(dict(row))
         if is_open is False:
             db.update(conn, row["id"], **sources.CLOSED)

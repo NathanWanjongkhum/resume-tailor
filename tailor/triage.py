@@ -4,8 +4,8 @@
 2. Survivors are ranked in code (free) by how many of the candidate's skills the
    posting mentions, and only the top `triage.max_per_run` go to Claude; the rest
    stay queued and compete again next run.
-3. Claude scores those in batches, 1-5, for relevance (fit to the facts) and
-   desirability (fit to `wants` / `avoid`).
+3. Claude scores those in batches, 1-5, for relevance (how many of the posting's
+   required qualifications the facts meet) and desirability (fit to `wants` / `avoid`).
 4. Recency (1-5, from when the job was posted) is computed in code when ranking,
    since it changes every day.
 """
@@ -45,7 +45,36 @@ def hard_filter(job: Job, prefs: Prefs) -> str | None:
     places = f.get("location_include", [])
     if places and location and not any(re.search(p, location, re.IGNORECASE) for p in places):
         return f"location {location!r} not in location_include"
+    most = f.get("max_years_required")
+    if most is not None and (years := years_required(job.get("posting") or "")) is not None and years > most:
+        return f"requires {years}+ years of experience"
     return None
+
+
+_NUMBER = r"\d{1,2}|one|two|three|four|five|six|seven|eight|nine|ten"
+_WORDS = {w: i for i, w in enumerate(_NUMBER.split("|")[1:], 1)}
+# "2+ years", "2-6 years", "2 to 6 years", "at least two years", "minimum of 3 yrs",
+# followed closely by "experience", which skips "a 4-year degree" or "founded 20 years ago".
+_YEARS = re.compile(
+    rf"\b({_NUMBER})\s*\+?\s*(?:(?:[-\u2013]|to)\s*(?:{_NUMBER})\s*)?\+?\s*(?:years?|yrs?)\b[^.\n]{{0,60}}?\bexperience",
+    re.IGNORECASE,
+)
+# Lines that only prefer the years, or offer them in place of a degree, don't require them.
+_OPTIONAL = re.compile(r"\b(prefer\w*|nice to have|bonus|a plus|ideally|in lieu|if associate)", re.IGNORECASE)
+
+
+def years_required(posting: str) -> int | None:
+    """Fewest years of experience the posting asks for, or None if it names none.
+
+    The fewest, since postings for several levels list each level's years.
+    """
+    found = [
+        int(n) if n.isdigit() else _WORDS[n.lower()]
+        for line in posting.splitlines()
+        if not _OPTIONAL.search(line)
+        for n in _YEARS.findall(line)
+    ]
+    return min(found, default=None)
 
 
 # Free signals for ranking. On the first 81 scored full postings, ordering by these put
@@ -103,7 +132,7 @@ def rank(jobs: list[Job], facts: Facts) -> list[Job]:
 class Score(BaseModel):
     model_config = ConfigDict(extra="forbid")
     job_id: str
-    relevance: int = Field(description="1-5: how well the candidate's facts fit the posting's requirements")
+    relevance: int = Field(description="1-5: how many of the posting's required qualifications the candidate meets")
     desirability: int = Field(description="1-5: how well the job matches the candidate's wants and avoids")
     reasons: str = Field(description="one or two sentences covering both scores")
     red_flags: list[str] = Field(
@@ -118,9 +147,11 @@ class Scores(BaseModel):
 
 SYSTEM = """\
 You triage job postings for one candidate. For each job, score relevance \
-(do the candidate's verified skills and experience fit what the posting \
-requires?) and desirability (does it match what the candidate wants and \
-avoids?), 1-5 each. Be calibrated: 5 means apply today, 3 is a coin flip, \
+(how many of the posting's required qualifications does the candidate meet, \
+counting each minimum years of experience, degree and must-have skill? 3 or \
+more only if they meet most of them; preferred or nice-to-have items don't \
+count against them) and desirability (does it match what the candidate \
+wants and avoids?), 1-5 each. Be calibrated: 5 means apply today, 3 is a coin flip, \
 1 is a waste of time. Postings marked INCOMPLETE are only an email \
 summary, so judge them on what's there and note the uncertainty.
 
