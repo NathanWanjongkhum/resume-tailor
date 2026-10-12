@@ -9,11 +9,14 @@ import sys
 import threading
 from collections.abc import Callable
 from datetime import UTC, datetime
+from functools import partial
 from pathlib import Path
 from typing import Any
 
 import pandas as pd
 import streamlit as st
+import yaml
+from code_editor import code_editor
 from pandas.io.formats.style import Styler
 from streamlit.delta_generator import DeltaGenerator
 
@@ -765,8 +768,88 @@ def missing_profile() -> list[str]:
     return [kind for kind in profile.UPLOADABLE if profile.get(db_conn(), kind) is None]
 
 
-def start_from_example(kind: str, editor_key: str) -> None:
-    st.session_state[editor_key] = (profile.EXAMPLES / f"{kind}.yaml").read_text()
+# Ace options: YAML wants two-space soft tabs; wrapping keeps long regexes and queries readable;
+# line numbers match the "Line N" in problem messages.
+EDITOR_OPTIONS = {
+    "tabSize": 2,
+    "useSoftTabs": True,
+    "showPrintMargin": False,
+    "wrap": True,
+    "showLineNumbers": True,
+    "showFoldWidgets": True,
+}
+
+
+def load_draft(kind: str, text: str) -> None:
+    """Point both editors (inline and expanded) at `text`.
+
+    The editor only reads its starting text when it mounts, so bumping the version
+    remounts it with the new text.
+    """
+    st.session_state[f"draft-{kind}"] = st.session_state[f"base-{kind}"] = text
+    st.session_state[f"draft-version-{kind}"] = st.session_state.get(f"draft-version-{kind}", 0) + 1
+
+
+def sync_draft(kind: str) -> None:
+    load_draft(kind, st.session_state[f"draft-{kind}"])
+
+
+def yaml_problems(kind: str, text: str) -> list[str]:
+    """What would stop `text` from being saved, with line numbers where the parser has them."""
+    if not text.strip():
+        return []
+    try:
+        profile.check(kind, text)
+    except ValueError as e:
+        err = e.__cause__
+        if not isinstance(err, yaml.MarkedYAMLError) or err.problem_mark is None:
+            return [str(e)]
+        problem = f"Line {err.problem_mark.line + 1}: {err.problem}"
+        # For an unclosed bracket or quote the parser gives up lines later, so say where it opened.
+        if err.context_mark is not None and err.context_mark.line != err.problem_mark.line:
+            problem += f" ({err.context} that starts on line {err.context_mark.line + 1})"
+        return [problem]
+    return []
+
+
+def yaml_editor(kind: str, *, where: str, height: str) -> list[str]:
+    """A YAML editor over this kind's draft: highlighting, folding, auto-indent, find and replace.
+
+    Ace's YAML mode marks syntax errors in the gutter as you type; below the editor go the
+    problems `profile.check` finds, which also cover missing fields. Returns those problems.
+    """
+    key = f"ace-{kind}-{where}-{st.session_state.get(f'draft-version-{kind}', 0)}"
+    response = code_editor(
+        st.session_state[f"base-{kind}"],
+        lang="yaml",
+        height=height,
+        response_mode=["debounce", "blur"],
+        options=EDITOR_OPTIONS,
+        # Word completion would turn Enter at the end of a word into an unwanted completion, and the
+        # component's default top scroll margin leaves the gutter a line out of step with the text.
+        props={
+            "placeholder": f"Paste or write your {kind} here",
+            "scrollMargin": [0, 0, 0, 0],
+            "enableLiveAutocompletion": False,
+            "enableSnippets": False,
+        },
+        key=key,
+    )
+    # The component keeps returning its last event, so only a new event id is an edit.
+    if response["id"] and response["id"] != st.session_state.get(f"seen-{key}"):
+        st.session_state[f"seen-{key}"] = response["id"]
+        st.session_state[f"draft-{kind}"] = response["text"]
+    problems = yaml_problems(kind, st.session_state[f"draft-{kind}"])
+    for problem in problems:
+        st.caption(f":red[:material/error:] {md(problem).replace('[', '\\[').replace(']', '\\]')}")
+    return problems
+
+
+def expanded_editor(kind: str) -> None:
+    yaml_editor(kind, where="expanded", height="640px")
+    if st.button("Done", key=f"expanded-done-{kind}", type="primary"):
+        sync_draft(kind)
+        st.rerun()
 
 
 def profile_review(kind: str, current: str | None, draft: str) -> None:
@@ -815,19 +898,32 @@ def profile_review(kind: str, current: str | None, draft: str) -> None:
             st.button("Discard", key=f"discard-{kind}", on_click=discard)
 
 
-def edit_profile(kind: str, current: str | None, editor_key: str) -> None:
+def edit_profile(kind: str, current: str | None) -> None:
     if current is None:
         st.button(
             "Start from the example",
             key=f"example-{kind}",
             icon=":material/content_copy:",
-            on_click=start_from_example,
-            args=(kind, editor_key),
+            on_click=load_draft,
+            args=(kind, (profile.EXAMPLES / f"{kind}.yaml").read_text()),
         )
-    text = st.text_area(kind, current or "", height=420, key=editor_key, label_visibility="collapsed")
-    if st.button("Review changes", key=f"review-edit-{kind}", type="primary", disabled=not text.strip()):
-        st.session_state[f"review-{kind}"] = text
-        st.rerun()
+    problems = yaml_editor(kind, where="inline", height="420px")
+    text = st.session_state[f"draft-{kind}"]
+    with st.container(horizontal=True, gap="small"):
+        if st.button(
+            "Review changes",
+            key=f"review-edit-{kind}",
+            type="primary",
+            disabled=not text.strip() or bool(problems) or text == current,
+            help="Fix the marked problem first" if problems else None,
+        ):
+            st.session_state[f"review-{kind}"] = text
+            st.rerun()
+        if st.button("Expand", key=f"expand-{kind}", icon=":material/open_in_full:"):
+            sync_draft(kind)  # start the expanded editor from the latest edits
+            # Closing with the X keeps the edits too: sync the inline editor either way.
+            dialog = st.dialog(f"Edit {kind}", width="large", on_dismiss=partial(sync_draft, kind))
+            dialog(expanded_editor)(kind)
 
 
 def upload_profile(kind: str, updated: str | None) -> None:
@@ -863,6 +959,10 @@ def profile_card(kind: str) -> None:
             st.warning(
                 f"No {kind} yet. Upload your file, or start from the example and replace its contents with yours."
             )
+        if st.session_state.get(f"draft-of-{kind}", "unset") != updated:
+            # First visit, or a save: start the editors from the stored copy.
+            st.session_state[f"draft-of-{kind}"] = updated
+            load_draft(kind, current or "")
         if (draft := st.session_state.get(f"review-{kind}")) is not None:
             profile_review(kind, current, draft)
             return
@@ -876,7 +976,7 @@ def profile_card(kind: str) -> None:
             label_visibility="collapsed",
         )
         if mode == "Edit":
-            edit_profile(kind, current, f"editor-{kind}-{updated}")  # a fresh editor after each save
+            edit_profile(kind, current)
         elif mode == "Upload":
             upload_profile(kind, updated)
         elif mode == "History":

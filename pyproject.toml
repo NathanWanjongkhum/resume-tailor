@@ -9,6 +9,7 @@ dependencies = [
     "pydantic>=2.7",
     "pyyaml>=6.0",
     "streamlit>=1.65.0",
+    "streamlit-code-editor>=0.1.22",
 ]
 
 [dependency-groups]

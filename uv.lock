@@ -1199,6 +1199,7 @@ dependencies = [
     { name = "pydantic" },
     { name = "pyyaml" },
     { name = "streamlit" },
+    { name = "streamlit-code-editor" },
 ]
 
 [package.dev-dependencies]
@@ -1215,6 +1216,7 @@ requires-dist = [
     { name = "pydantic", specifier = ">=2.7" },
     { name = "pyyaml", specifier = ">=6.0" },
     { name = "streamlit", specifier = ">=1.65.0" },
+    { name = "streamlit-code-editor", specifier = ">=0.1.22" },
 ]
 
 [package.metadata.requires-dev]
@@ -1417,6 +1419,18 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/8f/61/75c550a2d2acd79402aa1f32c8068c6cf47fa621d3995883a43caafeeadc/streamlit-1.65.0.tar.gz", hash = "sha256:42acd9ebdf3576a35584977c48a044ec0b5d3e4997fa9248809b9891598ac6a0", size = 9749831, upload-time = "2026-10-02T21:40:36.584Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/fa/e3/5c9d2e88563c9974e53ac744b1523ebb1fd8f0ebb1ecc28a5f6f6bb0baea/streamlit-1.65.0-py3-none-any.whl", hash = "sha256:517a7254e223f4986d2b2e0745d02acf8ca64656943e63e422d345ce34a7495b", size = 10313469, upload-time = "2026-10-02T21:40:33.164Z" },
+]
+
+[[package]]
+name = "streamlit-code-editor"
+version = "0.1.22"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "streamlit" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/67/6f/fc455957652d0f42124dbc3090fe58b8919ad5bcba575a36669499ded952/streamlit-code-editor-0.1.22.tar.gz", hash = "sha256:93e6ecb4060614bce99eaf758b4cb5c8ce2accc0eb5140cbbb23c05cb4e9d7f6", size = 3788010, upload-time = "2024-12-29T22:30:22.441Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/43/53/298050f856bfdd7dd47fbcd998af92ec47479a4c0fc1a89ff90c4f27a74a/streamlit_code_editor-0.1.22-py3-none-any.whl", hash = "sha256:31abe12a94abde64123f71049741c248cd52c9de7869decd32a8a5a96695fcf4", size = 4036058, upload-time = "2024-12-29T22:30:18.897Z" },
 ]
 
 [[package]]
