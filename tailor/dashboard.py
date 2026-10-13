@@ -1246,6 +1246,15 @@ def github_card() -> None:
             st.rerun()
 
 
+# An entry card's contents arrive just after it opens (they render only while open), so
+# fade them in rather than having them pop in.
+PROFILE_CSS = """<style>
+@keyframes pf-arrive { from { opacity: 0; transform: translateY(-3px); } to { opacity: 1; transform: none; } }
+[data-testid='stExpanderDetails'] > * { animation: pf-arrive 160ms ease-out; }
+@media (prefers-reduced-motion: reduce) { [data-testid='stExpanderDetails'] > * { animation: none; } }
+</style>"""
+
+
 def profile_page() -> None:
     show_flash()
     if missing := missing_profile():
@@ -1253,17 +1262,14 @@ def profile_page() -> None:
             f"Set up your {' and '.join(missing)} to start: the other pages work once both are saved. "
             "Each change is checked and shown to you before it's saved."
         )
-    # Only the open tab renders: the facts form alone is well over a hundred widgets.
-    facts, prefs, evidence = st.tabs(["Facts", "Preferences", "GitHub"], key="profile-tabs", on_change="rerun")
+    st.html(PROFILE_CSS)
+    facts, prefs, evidence = st.tabs(["Facts", "Preferences", "GitHub"], key="profile-tabs")
     with facts:
-        if profile_forms.is_open(facts):
-            profile_card("facts")
+        profile_card("facts")
     with prefs:
-        if profile_forms.is_open(prefs):
-            profile_card("preferences")
+        profile_card("preferences")
     with evidence:
-        if profile_forms.is_open(evidence):
-            github_card()
+        github_card()
 
 
 def day(iso: str | None) -> str:
