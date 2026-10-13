@@ -332,7 +332,9 @@ def status_line(*, link: bool) -> None:
         parts.append(f"next {systemd_time(timer.next_run)}" if timer.enabled else "daily run off")
         mark = RUN_MARKS.get(last[0]["status"], "") if last else ""
         text = f"{mark} :gray[{' · '.join(parts)}]"
-    with st.container(horizontal=True, vertical_alignment="center", horizontal_alignment="right", gap="medium"):
+    with st.container(
+        horizontal=True, vertical_alignment="center", horizontal_alignment="right", gap="medium", key="status-line"
+    ):
         st.markdown(text, width="content")
         if link:
             st.page_link(PIPELINE_PAGE, label="Pipeline", icon=":material/arrow_forward:", width="content")
@@ -1357,10 +1359,14 @@ APPLICATIONS_PAGE = st.Page(
 PIPELINE_PAGE = st.Page(needs_profile(pipeline_page), title="Pipeline", icon=":material/settings:", url_path="pipeline")
 PROFILE_PAGE = st.Page(profile_page, title="Profile", icon=":material/person:", url_path="profile")
 
-# Less empty space above the content than Streamlit's default, and a highlight for the
+# Less empty space above the content than Streamlit's default, the status line up in the
+# navigation bar when there's room beside the links, and a highlight for the
 # selected resume card (its container key starts with "picked-").
 PAGE_CSS = """<style>
 [data-testid='stMainBlockContainer'] { padding-top: 4rem; }
+@media (min-width: 1000px) {
+  [class*='st-key-status-line'] { position: fixed; top: 1.05rem; right: 1.5rem; width: auto; z-index: 999991; }
+}
 [class*='st-key-picked-'] { border-color: #2563eb; background-color: #eff6ff; box-shadow: inset 3px 0 0 #2563eb; }
 [class*='st-key-card-'] { position: relative; transition: border-color 0.1s, background-color 0.1s; }
 [class*='st-key-card-']:hover { border-color: #93c5fd; background-color: #f8fafc; }
