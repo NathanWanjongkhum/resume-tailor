@@ -13,7 +13,7 @@ import re
 import shutil
 from datetime import date, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -50,16 +50,38 @@ CLOSING = "Sincerely,"
 _ASCII = str.maketrans({"\u2018": "'", "\u2019": "'", "\u201c": '"', "\u201d": '"', "\u2013": "--", "\u2014": "--"})
 
 
+# The "passion" line names a broad field, never the employer's niche ("digital identity
+# software"), so the model picks from this list instead of writing its own.
+Industry = Literal[
+    "software engineering",
+    "web development",
+    "cloud computing",
+    "data and machine learning",
+    "cybersecurity",
+    "developer tools",
+    "healthcare technology",
+    "financial technology",
+    "education technology",
+    "consumer apps",
+    "e-commerce",
+    "gaming",
+    "robotics",
+    "aerospace",
+    "energy and climate",
+    "public service",
+]
+
+
 class Phrases(BaseModel):
     model_config = ConfigDict(extra="forbid")
     hook: str = Field(description="what about this employer or role stood out; from <job_posting> or <company>")
-    industry: str = Field(description="the field this role is in, e.g. 'healthcare software'")
+    industry: Industry = Field(description="the broad field this role is in; 'software engineering' if none fits")
     bring: str = Field(description="2-3 strengths the posting asks for that <resume> shows, as one noun phrase")
     enjoy: str = Field(description="an activity central to this role that <resume> shows the candidate doing")
 
 
 # Longest each phrase may be, so the letter stays short and each sentence reads.
-MAX_CHARS = {"hook": 100, "industry": 50, "bring": 160, "enjoy": 100}
+MAX_CHARS = {"hook": 100, "bring": 110, "enjoy": 80}
 
 SYSTEM = """\
 You fill the four [blanks] in a candidate's cover letter for one job. The rest \
@@ -71,12 +93,15 @@ Rules:
 - Each blank is one short phrase that reads naturally in its sentence: \
 lowercase unless it starts with a proper noun, no ending punctuation, no \
 quotes. Limits: {limits}.
-- hook and industry come from <job_posting> and <company>. Make the hook \
+- industry is the broad field from the list in the output schema, not the \
+employer's niche.
+- hook comes from <job_posting> and <company>. Make it \
 specific to this employer (its product, mission, customers or a project the \
 posting names), never praise that would fit any company, and don't repeat the \
 company's name.
 - bring and enjoy come only from <resume>, the candidate's checked resume for \
-this job: name what the posting asks for that the resume shows. A checker \
+this job: name the two or three things the posting asks for most that the \
+resume shows, not a list of every match. A checker \
 rejects any number or technology that <resume> doesn't contain.
 - Sound like a person: plain, warm and direct, no buzzwords.
 """
@@ -101,8 +126,12 @@ def long_date(day: date) -> str:
 def _degree(facts: Facts) -> tuple[str, str]:
     """(school, 'a Bachelor of ... and a minor in ...') from the first education entry."""
     edu = facts.raw["education"][0]
+    school = " ".join(str(edu["school"]).split())
+    # "from the University of Washington", but "from Example State University"
+    if re.match(r"(university|college|institute|school) of\b", school, re.IGNORECASE):
+        school = f"the {school}"
     degree = re.sub(r",\s*minor in\s+", " and a minor in ", " ".join(edu["degree"].split()), flags=re.IGNORECASE)
-    return str(edu["school"]), f"{'an' if degree[:1].lower() in 'aeiou' else 'a'} {degree}"
+    return school, f"{'an' if degree[:1].lower() in 'aeiou' else 'a'} {degree}"
 
 
 def _fixed(facts: Facts, employer: str | None) -> dict[str, str]:
@@ -157,9 +186,10 @@ def resume_context(t: Tailored, facts: Facts) -> str:
 def check(phrases: Phrases, *, about_job: str, about_candidate: str, facts: Facts) -> Report:
     """Errors for phrases that are too long, malformed or not backed by their sources."""
     rep = Report()
-    sources = {"hook": about_job, "industry": about_job, "bring": about_candidate, "enjoy": about_candidate}
+    sources = {"hook": about_job, "bring": about_candidate, "enjoy": about_candidate}
     vocab = tech_terms(facts)
-    for key, text in phrases.model_dump().items():
+    for key, source in sources.items():
+        text = getattr(phrases, key)
         phrase = _clean(text)
         if not phrase:
             rep.errors.append(f"{key}: empty")
@@ -167,12 +197,12 @@ def check(phrases: Phrases, *, about_job: str, about_candidate: str, facts: Fact
             rep.errors.append(f"{key}: {len(phrase)} chars, over the {MAX_CHARS[key]} limit")
         if re.search(r"[\[\]{}\n]", text):
             rep.errors.append(f"{key}: contains brackets or a line break")
-        if extra := numbers(phrase) - numbers(sources[key]):
+        if extra := numbers(phrase) - numbers(source):
             rep.errors.append(f"{key}: numbers not in its source: {sorted(extra)}")
         rep.errors += [
             f"{key}: mentions {term!r}, which its source does not"
             for term, pattern in vocab
-            if pattern.search(phrase) and not pattern.search(sources[key])
+            if pattern.search(phrase) and not pattern.search(source)
         ]
     return rep
 
@@ -189,7 +219,7 @@ def ask(  # noqa: PLR0913
     max_attempts: int = 2,
 ) -> tuple[Phrases, Report, str]:
     """The four phrases, their check report, and the model that served them."""
-    blanks = {k: f"[{k}]" for k in MAX_CHARS}
+    blanks = {k: f"[{k}]" for k in Phrases.model_fields}
     template = "\n\n".join(p.format(**_fixed(facts, employer), **blanks) for p in PARAGRAPHS)
     limits = ", ".join(f"{k} {n} characters" for k, n in MAX_CHARS.items())
     system = SYSTEM.format(template=template, limits=limits)

@@ -12,7 +12,7 @@ from tailor.validate import Report
 
 GOOD = Phrases(
     hook="mission to make home repairs painless",
-    industry="consumer software",
+    industry="consumer apps",
     bring="full-stack React and Firebase experience",
     enjoy="building tools that clients and contractors rely on",
 )
@@ -78,12 +78,18 @@ def test_compose_fills_the_template_from_facts() -> None:
 
     facts.raw["contact"]["address"] = "1 Main St\nPortland, OR 97201"
     facts.raw["education"][0]["degree"] = "Associate of Science, Minor in Mathematics"
+    facts.raw["education"][0]["school"] = "University of Washington"
     out = letter.compose(facts, GOOD, "Acme", date(2026, 10, 13))
     assert out["lines"][:2] == ["1 Main St", "Portland, OR 97201"]
-    assert "with an Associate of Science and a minor in Mathematics," in out["paragraphs"][1]
+    assert "the University of Washington with an Associate of Science and a minor in" in out["paragraphs"][1]
     text = letter.as_text(out)
     assert text.startswith("Alex Rivera\n1 Main St\n")
     assert text.endswith("Sincerely,\nAlex Rivera\n")
+
+
+def test_industry_must_be_a_broad_field() -> None:
+    with pytest.raises(ValueError, match="industry"):
+        Phrases.model_validate({**GOOD.model_dump(), "industry": "digital identity software"})
 
 
 def test_check_rejects_unsupported_phrases() -> None:
