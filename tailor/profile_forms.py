@@ -5,10 +5,15 @@ notes survive, and nothing is saved until the user reviews the draft as a whole.
 Widget keys carry a form version that the dashboard bumps whenever the draft changes
 shape (an entry added, moved or removed, or the YAML edited directly), so widgets
 restart from the draft then; plain value edits keep their widgets.
+
+The facts have well over a hundred widgets, so tabs, entry cards and popovers render
+their contents only while open, and text boxes get a height up front rather than
+sizing themselves after they appear, which shifted the page on every rerun.
 """
 
 from collections.abc import Callable
 from dataclasses import dataclass
+from functools import partial
 from typing import Any
 
 import pandas as pd
@@ -54,6 +59,8 @@ EDUCATION = (
 )
 NOTE_HELP = "What you checked this against (a repo, a document, your own words). Kept as a comment in the YAML."
 EXAMPLES_SHOWN = 3
+LINE_CHARS = 110  # characters per line of a full-width text box, estimated low so text rarely scrolls
+LINE_PX, PADDING_PX, MIN_TEXT_PX = 24, 22, 68  # Streamlit's text box can't be shorter than 68px
 WORDS_HINT = {"title": "intern, contractor", "company": "Acme, Initech", "location": "Seattle, Tacoma"}
 
 
@@ -83,6 +90,22 @@ class Form:
             self.edit(lambda doc: profile_edit.set_value(doc, path, value))
 
         return {"key": key, "on_change": changed}
+
+
+def text_height(text: str) -> int:
+    """A text box height that fits `text`."""
+    lines = sum(max(1, -(-len(line) // LINE_CHARS)) for line in text.splitlines() or [""])
+    return max(MIN_TEXT_PX, LINE_PX * lines + PADDING_PX)
+
+
+def is_open(container: Any) -> bool:  # noqa: ANN401
+    """Whether a lazy tab, expander or popover is open; None means it isn't tracked, so render it."""
+    return container.open is not False
+
+
+def popover(label: str, key: str, **kwargs: Any) -> Any:  # noqa: ANN401
+    """A popover that reruns when opened or closed, so its contents can render only while open."""
+    return st.popover(label, key=key, on_change="rerun", **kwargs)
 
 
 def _text(value: object) -> str | None:
@@ -166,17 +189,22 @@ def all_skills(doc: CommentedMap) -> list[str]:
 def claim_row(form: Form, doc: CommentedMap, path: Path, count: int) -> None:
     claim = profile_edit.get(doc, path)
     note = profile_edit.note(claim)
+    text = " ".join(str(claim.get("text") or "").split())
     with st.container(horizontal=True, vertical_alignment="bottom", gap="small"):
         st.text_area(
             f"`{md(claim.get('id'))}`" + (" :material/verified:" if note else ""),
-            " ".join(str(claim.get("text") or "").split()),
-            height="content",
+            text,
+            height=text_height(text),
             help=f"Verified: {md(note)}" if note else None,
             **form.bind((*path, "text"), _required_text),
         )
         with st.container(horizontal=True, vertical_alignment="center", gap="small", width="content"):
-            with st.popover("", icon=":material/edit_note:", help="Verification note", type="tertiary"):
-                note_editor(form, doc, path)
+            pop = popover(
+                "", form.key(*path, "note-pop"), icon=":material/edit_note:", help="Verification note", type="tertiary"
+            )
+            with pop:
+                if is_open(pop):
+                    note_editor(form, doc, path)
             item_buttons(form, path, count, "claim")
 
 
@@ -198,15 +226,19 @@ def add_claim(form: Form, doc: CommentedMap, path: Path) -> None:
             claim.insert(0, profile_edit.NOTE, note.strip())
         form.edit(lambda d: profile_edit.insert(d, (*path, "claims"), claim), reshape=True)
 
-    with st.popover("Add a claim", icon=":material/add:"), st.form(form.key(*path, "claim-form"), border=False):
-        st.text_area(
-            "Claim",
-            key=text_key,
-            placeholder="Something you did, in full: what, with which tools, and the result.",
-            help="Resumes may rephrase and select claims, never add to them, so put the numbers and tools here.",
-        )
-        st.text_area("Verification note", key=note_key, help=NOTE_HELP)
-        st.form_submit_button("Add claim", type="primary", on_click=add)
+    pop = popover("Add a claim", form.key(*path, "claim-pop"), icon=":material/add:")
+    with pop:
+        if not is_open(pop):
+            return
+        with st.form(form.key(*path, "claim-form"), border=False):
+            st.text_area(
+                "Claim",
+                key=text_key,
+                placeholder="Something you did, in full: what, with which tools, and the result.",
+                help="Resumes may rephrase and select claims, never add to them, so put the numbers and tools here.",
+            )
+            st.text_area("Verification note", key=note_key, help=NOTE_HELP)
+            st.form_submit_button("Add claim", type="primary", on_click=add)
 
 
 def entry_card(form: Form, doc: CommentedMap, section: str, i: int, skills: list[str]) -> None:
@@ -215,10 +247,16 @@ def entry_card(form: Form, doc: CommentedMap, section: str, i: int, skills: list
     what, details = ENTRIES[section]
     title = " · ".join(str(entry.get(k)) for k, _, _ in details[:2] if entry.get(k) and k != "repo")
     claims = entry.get("claims") or []
-    with st.expander(
-        f"{md(title or entry['id'])} ({len(claims)} claim{'s' * (len(claims) != 1)})",
+    # The label is part of an expander's identity, so a claim count here would close the card
+    # whenever a claim is added or removed.
+    card = st.expander(
+        md(title or entry["id"]),
         key=f"pf-open-{section}-{entry['id']}",
-    ):
+        on_change="rerun",
+    )
+    with card:
+        if not is_open(card):
+            return
         cols = st.columns(2)
         for n, (key, label, placeholder) in enumerate(details):
             with cols[n % 2]:
@@ -234,13 +272,17 @@ def entry_card(form: Form, doc: CommentedMap, section: str, i: int, skills: list
             help="Technologies used here. A bullet may only name a technology that's in its claim or this stack.",
             **form.bind((*path, "stack"), list),
         )
-        st.markdown("**Claims**")
+        st.markdown(f"**Claims** ({len(claims)})")
         for c in range(len(claims)):
             claim_row(form, doc, (*path, "claims", c), len(claims))
         with st.container(horizontal=True, vertical_alignment="center", gap="small"):
             add_claim(form, doc, path)
-            with st.popover("Note", icon=":material/verified:", help="Verification note for the whole entry"):
-                note_editor(form, doc, path)
+            pop = popover(
+                "Note", form.key(*path, "note-pop"), icon=":material/verified:", help="Verification note for the entry"
+            )
+            with pop:
+                if is_open(pop):
+                    note_editor(form, doc, path)
             st.space("stretch")
             item_buttons(form, path, len(doc[section]), what)
 
@@ -262,10 +304,14 @@ def add_entry(form: Form, doc: CommentedMap, section: str) -> None:
         # Newest first, like the resume.
         form.edit(lambda d: profile_edit.insert(d, (section,), entry, 0), reshape=True)
 
-    with st.popover(f"Add {what}", icon=":material/add:"), st.form(form.key(section, "new-form"), border=False):
-        for k, label, placeholder in details:
-            st.text_input(label, key=keys[k], placeholder=placeholder)
-        st.form_submit_button(f"Add {what}", type="primary", on_click=add)
+    pop = popover(f"Add {what}", form.key(section, "new-pop"), icon=":material/add:")
+    with pop:
+        if not is_open(pop):
+            return
+        with st.form(form.key(section, "new-form"), border=False):
+            for k, label, placeholder in details:
+                st.text_input(label, key=keys[k], placeholder=placeholder)
+            st.form_submit_button(f"Add {what}", type="primary", on_click=add)
 
 
 def entries_tab(form: Form, doc: CommentedMap, section: str) -> None:
@@ -338,10 +384,17 @@ def suggested_skills(form: Form, categories: list[str], unlisted: list[str]) -> 
         if picked:
             form.edit(edit, reshape=True)
 
-    with (
-        st.popover(f"Suggested skills ({len(unlisted)})", icon=":material/lightbulb:"),
-        st.form(form.key("skills", "suggested-form"), border=False),
-    ):
+    pop = popover(
+        f"Suggested skills ({len(unlisted)})", form.key("skills", "suggested-pop"), icon=":material/lightbulb:"
+    )
+    with pop:
+        if is_open(pop):
+            suggested_form(form, categories, unlisted, add)
+
+
+def suggested_form(form: Form, categories: list[str], unlisted: list[str], add: Callable[[], None]) -> None:
+    pick_key, into_key = form.key("skills", "suggested"), form.key("skills", "suggested-into")
+    with st.form(form.key("skills", "suggested-form"), border=False):
         st.caption(
             "Named in a stack or shown by your GitHub repos, but not in a category. "
             "Resumes may already list them; filing one here sets its category."
@@ -355,7 +408,10 @@ def education_tab(form: Form, doc: CommentedMap) -> None:
     schools = doc.get("education") or []
     for i, school in enumerate(schools):
         path: Path = ("education", i)
-        with st.expander(md(school.get("school") or "School"), key=f"pf-open-education-{i}"):
+        card = st.expander(md(school.get("school") or "School"), key=f"pf-open-education-{i}", on_change="rerun")
+        with card:
+            if not is_open(card):
+                continue
             cols = st.columns(2)
             for n, (key, label, placeholder) in enumerate(EDUCATION):
                 with cols[n % 2]:
@@ -436,17 +492,18 @@ FACTS_TABS = ("Experience", "Projects", "Skills", "Education", "Contact")
 
 
 def facts_form(form: Form, doc: CommentedMap, github_skills: list[str]) -> None:
-    experience, projects, skills, education, contact = st.tabs(FACTS_TABS, key="pf-facts-tabs")
-    with experience:
-        entries_tab(form, doc, "experience")
-    with projects:
-        entries_tab(form, doc, "projects")
-    with skills:
-        skills_tab(form, doc, github_skills)
-    with education:
-        education_tab(form, doc)
-    with contact:
-        contact_tab(form, doc)
+    tabs = st.tabs(FACTS_TABS, key="pf-facts-tabs", on_change="rerun")
+    renders = (
+        partial(entries_tab, form, doc, "experience"),
+        partial(entries_tab, form, doc, "projects"),
+        partial(skills_tab, form, doc, github_skills),
+        partial(education_tab, form, doc),
+        partial(contact_tab, form, doc),
+    )
+    for tab, render in zip(tabs, renders, strict=True):
+        with tab:
+            if is_open(tab):
+                render()
 
 
 # Preferences
@@ -485,7 +542,11 @@ def field(form: Form, f: Field, prefs: CommentedMap, jobs: list[Job]) -> None:
         patterns_field(form, f, [str(p) for p in value or []], jobs)
     elif f.widget == "long_text":
         st.text_area(
-            f.label, str(value or ""), height="content", help=f.help or None, **form.bind(f.path, _required_text)
+            f.label,
+            str(value or ""),
+            height=text_height(str(value or "")),
+            help=f.help or None,
+            **form.bind(f.path, _required_text),
         )
     elif f.widget == "text":
         st.text_input(f.label, str(value or ""), help=f.help or None, **form.bind(f.path, _required_text))

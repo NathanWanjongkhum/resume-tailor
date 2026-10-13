@@ -1085,7 +1085,8 @@ def form_edit(kind: str, edit: profile_forms.Edit, reshape: bool) -> None:  # no
         edit(doc)
         text = profile_edit.dump(doc)
     except (ValueError, KeyError, IndexError) as e:
-        flash("error", f"Couldn't make that change: {e}")
+        # A toast, since a flash would wait for a full rerun and this card reruns alone.
+        st.toast(f"Couldn't make that change: {e}", icon=":material/error:")
         return
     load_draft(kind, text, reshape=reshape)
 
@@ -1113,22 +1114,36 @@ def form_mode(kind: str) -> None:
 
 
 def draft_bar(kind: str, current: str | None) -> None:
-    """Unsaved edits, from the form or the YAML editor, and the way to save them."""
+    """Unsaved edits, from the form or the YAML editor, and the way to save them.
+
+    Shown even when there's nothing to save, so the first edit doesn't push the form down.
+    """
     draft = st.session_state[f"draft-{kind}"]
-    if not draft.strip() or draft == current:
+    if not draft.strip() and current is None:
         return
-    problems = yaml_problems(kind, draft)
+    dirty = bool(draft.strip()) and draft != current
+    problems = yaml_problems(kind, draft) if dirty else []
     with st.container(border=True, horizontal=True, vertical_alignment="center", gap="small"):
-        if problems:
+        if not dirty:
+            st.markdown(":gray[:material/check: No unsaved changes]")
+        elif problems:
             st.markdown(f":red[:material/error:] **Unsaved changes can't be saved yet:** {md(problems[0])}")
         else:
             n = len(profile.changes(kind, current, draft)) if current is not None else 0
             st.markdown(f":orange[:material/edit:] **Unsaved changes**{f' ({n})' if n else ''}")
         st.space("stretch")
-        if st.button("Review and save", key=f"review-edit-{kind}", type="primary", disabled=bool(problems)):
+        if st.button(
+            "Review and save", key=f"review-edit-{kind}", type="primary", disabled=not dirty or bool(problems)
+        ):
             st.session_state[f"review-{kind}"] = draft
             st.rerun()
-        st.button("Discard", key=f"discard-draft-{kind}", on_click=load_draft, args=(kind, current or ""))
+        st.button(
+            "Discard",
+            key=f"discard-draft-{kind}",
+            disabled=not dirty,
+            on_click=load_draft,
+            args=(kind, current or ""),
+        )
 
 
 def upload_profile(kind: str, updated: str | None) -> None:
@@ -1153,7 +1168,9 @@ def profile_history(kind: str, older: list[sqlite3.Row]) -> None:
                 st.rerun()
 
 
+@st.fragment
 def profile_card(kind: str) -> None:
+    """Facts or preferences. A fragment, so an edit in its form reruns only this card."""
     conn = db_conn()
     current, updated = profile.get(conn, kind), profile.updated_at(conn, kind)
     with st.container(border=True):
@@ -1236,13 +1253,17 @@ def profile_page() -> None:
             f"Set up your {' and '.join(missing)} to start: the other pages work once both are saved. "
             "Each change is checked and shown to you before it's saved."
         )
-    facts, prefs, evidence = st.tabs(["Facts", "Preferences", "GitHub"], key="profile-tabs")
+    # Only the open tab renders: the facts form alone is well over a hundred widgets.
+    facts, prefs, evidence = st.tabs(["Facts", "Preferences", "GitHub"], key="profile-tabs", on_change="rerun")
     with facts:
-        profile_card("facts")
+        if profile_forms.is_open(facts):
+            profile_card("facts")
     with prefs:
-        profile_card("preferences")
+        if profile_forms.is_open(prefs):
+            profile_card("preferences")
     with evidence:
-        github_card()
+        if profile_forms.is_open(evidence):
+            github_card()
 
 
 def day(iso: str | None) -> str:
