@@ -19,7 +19,6 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from . import llm
 from .facts import Facts
-from .render import compile_pdf, render_tex
 from .schema import Tailored
 from .validate import Report, numbers, tech_terms
 
@@ -162,7 +161,7 @@ def as_text(letter: dict[str, Any]) -> str:
 
 
 def _clean(phrase: str) -> str:
-    # Typographic quotes and dashes would need a Unicode font in the PDF; ASCII renders anywhere.
+    # Typographic quotes and dashes can come out garbled in application forms; ASCII pastes anywhere.
     phrase = phrase.translate(_ASCII)
     return " ".join(phrase.split()).strip(" .,;:\"'")
 
@@ -252,7 +251,7 @@ def write(  # noqa: PLR0913
     effort: llm.Effort = "high",
     today: date | None = None,
 ) -> Report:
-    """Write cover_letter.{pdf,tex,txt,json} next to the resume in outdir.
+    """Write cover_letter.{txt,json} next to the resume in outdir.
 
     Reads the posting, company profile and tailored resume that output.produce saved there.
     """
@@ -273,14 +272,14 @@ def write(  # noqa: PLR0913
     work = outdir / f".{NAME}.partial"
     shutil.rmtree(work, ignore_errors=True)
     work.mkdir()
-    (work / f"{NAME}.tex").write_text(render_tex(letter, "cover_letter.tex.j2"))
-    compile_pdf(work / f"{NAME}.tex")
     (work / f"{NAME}.txt").write_text(as_text(letter))
     saved = {"phrases": phrases.model_dump(), "model": model, "errors": rep.errors, "warnings": rep.warnings}
     (work / f"{NAME}.json").write_text(json.dumps(saved, indent=2))
-    for ext in ("tex", "pdf", "txt", "json"):
-        if (work / f"{NAME}.{ext}").exists():
-            (work / f"{NAME}.{ext}").replace(outdir / f"{NAME}.{ext}")
+    for ext in ("txt", "json"):
+        (work / f"{NAME}.{ext}").replace(outdir / f"{NAME}.{ext}")
+    # Letters written before it was text only; a rewrite mustn't leave the old wording beside it.
+    for ext in ("tex", "pdf"):
+        (outdir / f"{NAME}.{ext}").unlink(missing_ok=True)
     shutil.rmtree(work, ignore_errors=True)
     return rep
 

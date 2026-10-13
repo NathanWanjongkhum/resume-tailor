@@ -42,11 +42,10 @@ Paused postings ─► recheck: reopened → back in line | gone → filtered
 | `examples/facts.yaml` | format of your facts: every claim you're willing to make (fictional example) |
 | `examples/preferences.yaml` | format of your preferences: Gmail query, filters, thresholds, wants and avoid |
 | `templates/resume.tex.j2` | layout (Jake's Resume template, Jinja delimiters `((( )))` / `((* *))`) |
-| `templates/cover_letter.tex.j2` | cover letter layout; its wording is in `tailor/letter.py` |
 | `tailor/` | pipeline code; `tailor/pipeline.py` has the stages |
 | `deploy/` | systemd user units: the pipeline timer and the dashboard |
 | `data/jobs.db` | all state, including your uploaded profile (not committed) |
-| `out/` | one folder per generated resume: `resume.pdf`, `report.md`, `posting.txt`, `cover_letter.pdf`, ... (not committed) |
+| `out/` | one folder per generated resume: `resume.pdf`, `report.md`, `posting.txt`, `cover_letter.txt`, ... (not committed) |
 
 ## Setup
 

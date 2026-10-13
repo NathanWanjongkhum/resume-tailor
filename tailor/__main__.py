@@ -216,7 +216,7 @@ def cmd_gen(args: argparse.Namespace) -> None:
 def cmd_letter(args: argparse.Namespace) -> None:
     g = triage.load_prefs()["generate"]
     via, effort = llm.backend(g["backend"]), llm.effort(g.get("effort", "high"))
-    print("wrote", pipeline.write_letter(db.connect(), args.job_id, Facts(), via, effort) / f"{letter.NAME}.pdf")
+    print("wrote", pipeline.write_letter(db.connect(), args.job_id, Facts(), via, effort) / f"{letter.NAME}.txt")
 
 
 def cmd_list(args: argparse.Namespace) -> None:

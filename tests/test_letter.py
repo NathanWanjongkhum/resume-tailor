@@ -116,13 +116,11 @@ def test_write_retries_then_saves_the_letter(tmp_path: Path, monkeypatch: pytest
         return answers.pop(0), "fake"
 
     monkeypatch.setattr(letter.llm, "call", fake_call)
-    monkeypatch.setattr(letter, "compile_pdf", lambda _tex: None)
     rep = letter.write(tmp_path, Facts(), employer="Acme", today=date(2026, 10, 13))
     assert rep.ok
     assert "Kubernetes" in prompts[1]
     assert "<facts>" not in prompts[0]
     assert "Acme's mission to make home repairs painless" in (tmp_path / "cover_letter.txt").read_text()
-    assert "Acme's mission" in (tmp_path / "cover_letter.tex").read_text()
     assert json.loads((tmp_path / "cover_letter.json").read_text())["errors"] == []
     assert not (tmp_path / ".cover_letter.partial").exists()
 
