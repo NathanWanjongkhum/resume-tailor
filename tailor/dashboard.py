@@ -131,6 +131,8 @@ MAX_UNSCROLLED_CARDS = 5
 # A letter page fitted to the frame's width, plus the viewer's toolbar.
 PDF_ASPECT = "17 / 23"
 NOON = 12
+# How often the status line refreshes during a run, and otherwise (to notice the daily run).
+LIVE_POLL_S, IDLE_POLL_S = 3, 60
 
 st.set_page_config(page_title="Resume Tailor", page_icon=":material/description:", layout="wide")
 
@@ -327,16 +329,29 @@ def job_heading(job: Job) -> None:
     st.caption(md(f"{job['company'] or 'Unknown company'} · {where}{pay}"))
 
 
-@st.fragment(run_every=3)
-def status_line() -> None:
-    """One line on every page: live progress while running, else the last and next run."""
+def status_line(*, poll: bool) -> None:
+    """One line on every page: live progress while running, else the last and next run.
+
+    It refreshes itself on a timer only where `poll` is set. Every rerun, a fragment's
+    included, makes the browser re-render the app's run state, which on a page as large
+    as the Profile page stalls Firefox for 50-100ms: a hitch in any expand under way.
+    """
+    if not poll:
+        status_text()
+        return
+    live = progress.live_run(db_conn()) is not None
+    st.fragment(run_every=LIVE_POLL_S if live else IDLE_POLL_S)(status_text)()
+
+
+def status_text() -> None:
     conn = db_conn()
     progress.recover(conn, clean_partials=False)
     live = progress.live_run(conn)
-    was_running = st.session_state.get("was_running", False)
+    was_running = st.session_state.get("was_running")
     st.session_state["was_running"] = live is not None
-    if was_running and live is None:
-        st.rerun(scope="app")  # a run just ended: refresh everything
+    if was_running is not None and was_running != (live is not None):
+        # A run started or ended: refresh everything, which also sets the polling interval.
+        st.rerun(scope="app")
     if live is not None:
         done, total = live["stage_done"] or 0, live["stage_total"]
         where = f"{STAGE_LABELS.get(live['stage'], 'Starting')} {done} of {total if total is not None else '…'}"
@@ -1502,5 +1517,6 @@ PAGE_CSS = """<style>
 </style>"""
 st.html(PAGE_CSS)
 page = st.navigation([RESUMES_PAGE, JOBS_PAGE, APPLICATIONS_PAGE, PIPELINE_PAGE, PROFILE_PAGE], position="top")
-status_line()
+# The Profile page holds thousands of elements, so nothing reruns there on a timer.
+status_line(poll=page.url_path != PROFILE_PAGE.url_path)
 page.run()

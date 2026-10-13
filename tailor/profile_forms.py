@@ -6,10 +6,12 @@ Widget keys carry a form version that the dashboard bumps whenever the draft cha
 shape (an entry added, moved or removed, or the YAML edited directly), so widgets
 restart from the draft then; plain value edits keep their widgets.
 
-Everything renders up front, closed cards and other tabs included, so opening and
-switching happen in the browser at once; rendering a card's contents only once it
-opened made it open empty and then jump as they arrived. Text boxes get a height up
-front rather than sizing themselves after they appear, which shifted the page on
+Entries are edited one at a time: a row of chips picks the entry and its editor shows
+below. Widgets hidden in collapsed cards still cost the browser on every popover or
+rerun (Firefox stalled 50-100ms with every entry's widgets on the page), and cards
+that render only once opened can't open smoothly, so nothing is collapsed. Tabs and
+popovers render up front, so they switch and open at once. Text boxes get a height
+up front rather than sizing themselves after they appear, which shifted the page on
 every rerun.
 """
 
@@ -224,15 +226,31 @@ def add_claim(form: Form, doc: CommentedMap, path: Path) -> None:
         st.form_submit_button("Add claim", type="primary", on_click=add)
 
 
-def entry_card(form: Form, doc: CommentedMap, section: str, i: int, skills: list[str]) -> None:
+def pick(section: str, ids: list[str], label: Callable[[str], str]) -> int | None:
+    """Chips naming each entry of a section; returns the index of the one picked.
+
+    The choice is kept by id under a key that doesn't change with the form version, so it
+    survives edits and moves, and falls back to the first entry when its entry is removed.
+    """
+    key = f"pf-pick-{section}"
+    if st.session_state.get(key) not in ids:
+        st.session_state[key] = ids[0] if ids else None
+    if not ids:
+        return None
+    st.pills(section, ids, format_func=label, required=True, key=key, label_visibility="collapsed")
+    return ids.index(st.session_state[key])
+
+
+def entry_title(entry: dict[str, Any], details: tuple[tuple[str, str, str], ...]) -> str:
+    return " · ".join(str(entry.get(k)) for k, _, _ in details[:2] if entry.get(k) and k != "repo") or str(entry["id"])
+
+
+def entry_editor(form: Form, doc: CommentedMap, section: str, i: int, skills: list[str]) -> None:
     path: Path = (section, i)
     entry = profile_edit.get(doc, path)
     what, details = ENTRIES[section]
-    title = " · ".join(str(entry.get(k)) for k, _, _ in details[:2] if entry.get(k) and k != "repo")
     claims = entry.get("claims") or []
-    # The label is part of an expander's identity, so a claim count in it would close the
-    # card whenever a claim is added or removed.
-    with st.expander(md(title or entry["id"]), key=f"pf-open-{section}-{entry['id']}"):
+    with st.container(border=True):
         cols = st.columns(2)
         for n, (key, label, placeholder) in enumerate(details):
             with cols[n % 2]:
@@ -275,6 +293,7 @@ def add_entry(form: Form, doc: CommentedMap, section: str) -> None:
         entry["stack"], entry["claims"] = profile_edit.flow_list([]), []
         # Newest first, like the resume.
         form.edit(lambda d: profile_edit.insert(d, (section,), entry, 0), reshape=True)
+        st.session_state[f"pf-pick-{section}"] = entry["id"]  # and show it
 
     with st.popover(f"Add {what}", icon=":material/add:"), st.form(form.key(section, "new-form"), border=False):
         for k, label, placeholder in details:
@@ -283,10 +302,13 @@ def add_entry(form: Form, doc: CommentedMap, section: str) -> None:
 
 
 def entries_tab(form: Form, doc: CommentedMap, section: str) -> None:
-    skills = all_skills(doc)
-    for i in range(len(doc.get(section) or [])):
-        entry_card(form, doc, section, i, skills)
+    entries = doc.get(section) or []
+    _, details = ENTRIES[section]
+    titles = {str(e["id"]): entry_title(e, details) for e in entries}
+    i = pick(section, list(titles), lambda entry_id: md(titles[entry_id]))
     add_entry(form, doc, section)
+    if i is not None:
+        entry_editor(form, doc, section, i, all_skills(doc))
 
 
 def skills_tab(form: Form, doc: CommentedMap, github_skills: list[str]) -> None:
@@ -367,17 +389,25 @@ def suggested_skills(form: Form, categories: list[str], unlisted: list[str]) -> 
 
 def education_tab(form: Form, doc: CommentedMap) -> None:
     schools = doc.get("education") or []
-    for i, school in enumerate(schools):
-        path: Path = ("education", i)
-        with st.expander(md(school.get("school") or "School"), key=f"pf-open-education-{i}"):
-            cols = st.columns(2)
-            for n, (key, label, placeholder) in enumerate(EDUCATION):
-                with cols[n % 2]:
-                    text_input(form, doc, (*path, key), label, placeholder)
-            coursework_editor(form, doc, (*path, "coursework"))
-            with st.container(horizontal=True):
-                st.space("stretch")
-                item_buttons(form, path, len(schools), "school")
+    # Schools have no ids, so the chips go by position.
+    names = {str(n): str(s.get("school") or "School") for n, s in enumerate(schools)}
+    i = pick("education", list(names), lambda n: md(names[n]))
+    add_school(form)
+    if i is None:
+        return
+    path: Path = ("education", i)
+    with st.container(border=True):
+        cols = st.columns(2)
+        for n, (key, label, placeholder) in enumerate(EDUCATION):
+            with cols[n % 2]:
+                text_input(form, doc, (*path, key), label, placeholder)
+        coursework_editor(form, doc, (*path, "coursework"))
+        with st.container(horizontal=True):
+            st.space("stretch")
+            item_buttons(form, path, len(schools), "school")
+
+
+def add_school(form: Form) -> None:
     st.button(
         "Add school",
         icon=":material/add:",

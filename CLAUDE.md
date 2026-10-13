@@ -82,6 +82,12 @@ ignores; when a `# noqa` is truly needed, use the bare code. Comments explain *w
   Buttons that act on a run are keyed by run id. `st.rerun()` drops messages, so use
   `flash()`. The resume preview is the browser's PDF viewer in a plain iframe (`preview.py`):
   `st.iframe` sandboxes its frame and Chrome won't show PDFs in sandboxed frames.
+- **Smoothness** (measured in Firefox, where it shows most): every rerun and every popover
+  open costs the browser in proportion to the widgets on the page, hidden ones included;
+  with every facts entry's widgets in collapsed expanders (6.6k elements) both stalled
+  50-100ms. So the Profile page edits one entry at a time (chips pick it), and nothing
+  reruns there on a timer (`status_line(poll=...)`). Expanders that render their contents
+  only once opened can't open smoothly; don't use them for that.
 - **Untrusted input**: email and web content flows into prompts and the database. Fetch only
   http(s) (`sources.http_get`), and render only http(s) links. hiring.cafe pages sit behind
   Cloudflare; don't work around it. LinkedIn returns HTTP 429 on bursts, which is what
