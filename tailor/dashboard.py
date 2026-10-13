@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any
 
 import pandas as pd
+import ruamel.yaml
 import streamlit as st
 import yaml
 from code_editor import code_editor
@@ -23,7 +24,21 @@ from streamlit.delta_generator import DeltaGenerator
 # Streamlit runs this file as a script, so make the package importable.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from tailor import control, db, github, letter, llm, pipeline, preview, profile, progress, tracking, triage
+from tailor import (
+    control,
+    db,
+    github,
+    letter,
+    llm,
+    pipeline,
+    preview,
+    profile,
+    profile_edit,
+    profile_forms,
+    progress,
+    tracking,
+    triage,
+)
 from tailor.facts import Facts
 from tailor.paths import OUT
 
@@ -916,14 +931,21 @@ EDITOR_OPTIONS = {
 }
 
 
-def load_draft(kind: str, text: str) -> None:
-    """Point both editors (inline and expanded) at `text`.
+def bump(key: str) -> None:
+    st.session_state[key] = st.session_state.get(key, 0) + 1
+
+
+def load_draft(kind: str, text: str, *, reshape: bool = True) -> None:
+    """Point the YAML editors (inline and expanded) and the form at `text`.
 
     The editor only reads its starting text when it mounts, so bumping the version
-    remounts it with the new text.
+    remounts it with the new text. The form's widgets restart from the draft unless
+    the change came from one of them (`reshape=False`), which keeps the focus there.
     """
     st.session_state[f"draft-{kind}"] = st.session_state[f"base-{kind}"] = text
-    st.session_state[f"draft-version-{kind}"] = st.session_state.get(f"draft-version-{kind}", 0) + 1
+    bump(f"draft-version-{kind}")
+    if reshape:
+        bump(f"form-version-{kind}")
 
 
 def sync_draft(kind: str) -> None:
@@ -975,6 +997,7 @@ def yaml_editor(kind: str, *, where: str, height: str) -> list[str]:
     if response["id"] and response["id"] != st.session_state.get(f"seen-{key}"):
         st.session_state[f"seen-{key}"] = response["id"]
         st.session_state[f"draft-{kind}"] = response["text"]
+        bump(f"form-version-{kind}")
     problems = yaml_problems(kind, st.session_state[f"draft-{kind}"])
     for problem in problems:
         st.caption(f":red[:material/error:] {md(problem).replace('[', '\\[').replace(']', '\\]')}")
@@ -1034,32 +1057,78 @@ def profile_review(kind: str, current: str | None, draft: str) -> None:
             st.button("Discard", key=f"discard-{kind}", on_click=discard)
 
 
-def edit_profile(kind: str, current: str | None) -> None:
+def start_from_example(kind: str) -> None:
+    st.button(
+        "Start from the example",
+        key=f"example-{kind}",
+        icon=":material/content_copy:",
+        on_click=load_draft,
+        args=(kind, (profile.EXAMPLES / f"{kind}.yaml").read_text()),
+    )
+
+
+def yaml_mode(kind: str, current: str | None) -> None:
     if current is None:
-        st.button(
-            "Start from the example",
-            key=f"example-{kind}",
-            icon=":material/content_copy:",
-            on_click=load_draft,
-            args=(kind, (profile.EXAMPLES / f"{kind}.yaml").read_text()),
-        )
-    problems = yaml_editor(kind, where="inline", height="420px")
-    text = st.session_state[f"draft-{kind}"]
-    with st.container(horizontal=True, gap="small"):
-        if st.button(
-            "Review changes",
-            key=f"review-edit-{kind}",
-            type="primary",
-            disabled=not text.strip() or bool(problems) or text == current,
-            help="Fix the marked problem first" if problems else None,
-        ):
-            st.session_state[f"review-{kind}"] = text
+        start_from_example(kind)
+    yaml_editor(kind, where="inline", height="420px")
+    if st.button("Expand", key=f"expand-{kind}", icon=":material/open_in_full:"):
+        sync_draft(kind)  # start the expanded editor from the latest edits
+        # Closing with the X keeps the edits too: sync the inline editor either way.
+        dialog = st.dialog(f"Edit {kind}", width="large", on_dismiss=partial(sync_draft, kind))
+        dialog(expanded_editor)(kind)
+
+
+def form_edit(kind: str, edit: profile_forms.Edit, reshape: bool) -> None:  # noqa: FBT001
+    """Apply one form edit to the draft."""
+    try:
+        doc = profile_edit.parse(st.session_state[f"draft-{kind}"])
+        edit(doc)
+        text = profile_edit.dump(doc)
+    except (ValueError, KeyError, IndexError) as e:
+        flash("error", f"Couldn't make that change: {e}")
+        return
+    load_draft(kind, text, reshape=reshape)
+
+
+def form_mode(kind: str) -> None:
+    draft = st.session_state[f"draft-{kind}"]
+    if not draft.strip():
+        st.caption(f"No {kind} yet. Start from the example and replace its contents with yours, or upload a file.")
+        start_from_example(kind)
+        return
+    try:
+        doc = profile_edit.parse(draft)
+    except (yaml.YAMLError, ruamel.yaml.YAMLError, TypeError):
+        st.warning("The draft isn't valid YAML, so it can't be shown as a form. Fix it under **YAML**.")
+        return
+    form = profile_forms.Form(kind, st.session_state.get(f"form-version-{kind}", 0), partial(form_edit, kind))
+    conn = db_conn()
+    if kind == "facts":
+        evidence = profile.load("github", conn)
+        github_skills = sorted({s for info in evidence.values() for s in info["skills"]}, key=str.lower)
+        profile_forms.facts_form(form, doc, github_skills)
+    else:
+        stored = profile.load("preferences", conn) if profile.get(conn, "preferences") is not None else None
+        profile_forms.preferences_form(form, doc, stored, all_jobs())
+
+
+def draft_bar(kind: str, current: str | None) -> None:
+    """Unsaved edits, from the form or the YAML editor, and the way to save them."""
+    draft = st.session_state[f"draft-{kind}"]
+    if not draft.strip() or draft == current:
+        return
+    problems = yaml_problems(kind, draft)
+    with st.container(border=True, horizontal=True, vertical_alignment="center", gap="small"):
+        if problems:
+            st.markdown(f":red[:material/error:] **Unsaved changes can't be saved yet:** {md(problems[0])}")
+        else:
+            n = len(profile.changes(kind, current, draft)) if current is not None else 0
+            st.markdown(f":orange[:material/edit:] **Unsaved changes**{f' ({n})' if n else ''}")
+        st.space("stretch")
+        if st.button("Review and save", key=f"review-edit-{kind}", type="primary", disabled=bool(problems)):
+            st.session_state[f"review-{kind}"] = draft
             st.rerun()
-        if st.button("Expand", key=f"expand-{kind}", icon=":material/open_in_full:"):
-            sync_draft(kind)  # start the expanded editor from the latest edits
-            # Closing with the X keeps the edits too: sync the inline editor either way.
-            dialog = st.dialog(f"Edit {kind}", width="large", on_dismiss=partial(sync_draft, kind))
-            dialog(expanded_editor)(kind)
+        st.button("Discard", key=f"discard-draft-{kind}", on_click=load_draft, args=(kind, current or ""))
 
 
 def upload_profile(kind: str, updated: str | None) -> None:
@@ -1102,17 +1171,20 @@ def profile_card(kind: str) -> None:
         if (draft := st.session_state.get(f"review-{kind}")) is not None:
             profile_review(kind, current, draft)
             return
+        draft_bar(kind, current)
         older = profile.history(conn, kind)
-        modes = ["Edit", "Upload", *(["History"] if older else [])]
+        modes = ["Form", "YAML", "Upload", *(["History"] if older else [])]
         mode = st.segmented_control(
             "Change",
             modes,
-            default="Upload" if current is None else "Edit",
+            default="Form",
             key=f"mode-{kind}",
             label_visibility="collapsed",
         )
-        if mode == "Edit":
-            edit_profile(kind, current)
+        if mode == "Form":
+            form_mode(kind)
+        elif mode == "YAML":
+            yaml_mode(kind, current)
         elif mode == "Upload":
             upload_profile(kind, updated)
         elif mode == "History":
@@ -1164,12 +1236,13 @@ def profile_page() -> None:
             f"Set up your {' and '.join(missing)} to start: the other pages work once both are saved. "
             "Each change is checked and shown to you before it's saved."
         )
-    facts_col, prefs_col = st.columns(2, gap="medium")
-    with facts_col:
+    facts, prefs, evidence = st.tabs(["Facts", "Preferences", "GitHub"], key="profile-tabs")
+    with facts:
         profile_card("facts")
-    with prefs_col:
+    with prefs:
         profile_card("preferences")
-    github_card()
+    with evidence:
+        github_card()
 
 
 def day(iso: str | None) -> str:

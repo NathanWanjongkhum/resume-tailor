@@ -70,11 +70,20 @@ Profile tab or from the command line:
     uv run python -m tailor base                    # check the untailored resume
 
 Until both are saved, the other dashboard pages point you to the Profile tab.
-Every change (an upload, an edit in the dashboard's editor, or restoring an older
-version) is checked first, then shown to you as a summary of added, removed and
-reworded claims plus a line diff, and saved only when you confirm. Replaced
-versions are kept (the last 20) under History. On the command line, `import`
-prints the same summary and asks before replacing (`--yes` skips the question).
+Its **Form** view covers the common edits without touching YAML: claims, stacks and
+entries (add, reword, reorder, remove), skill categories, contact details, and every
+preference. Filter patterns show how many past jobs each one matches, plain words
+can be added without writing a regular expression, and a tester shows which
+filter, if any, would skip a given title, company or location. Form edits keep the
+file's comments, including the verification note above an entry or claim, which
+moves and is removed with it. **YAML** is the full document, for anything else.
+
+Every change (a form or YAML edit, an upload, or restoring an older version) is
+checked first, then shown to you as a summary of what changes (claims added,
+removed or reworded; settings with their old and new values) plus a line diff, and
+saved only when you confirm. Replaced versions are kept (the last 20) under
+History. On the command line, `import` prints the same summary and asks before
+replacing (`--yes` skips the question).
 
 ### Gmail
 

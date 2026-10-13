@@ -23,6 +23,7 @@ KINDS = ("facts", "preferences", "github")
 UPLOADABLE = ("facts", "preferences")
 PREFS_SECTIONS = ("gmail", "hard_filters", "triage", "generate", "wants", "avoid")
 HISTORY_KEEP = 20  # replaced versions kept per kind
+SHORT = 60  # longer values are summarized in a review
 
 
 class MissingProfileError(LookupError):
@@ -95,31 +96,74 @@ def changes(kind: str, old: str | None, new: str) -> list[str]:
         return [f"Adds {kind} (nothing is stored yet)."]
     before, after = yaml.safe_load(old), yaml.safe_load(new)
     if kind == "preferences":
-        return [
-            f"{'Adds' if s not in before else 'Removes' if s not in after else 'Changes'} `{s}`"
-            for s in sorted(before.keys() | after.keys())
-            if before.get(s) != after.get(s)
-        ] or ["Only comments or formatting change."]
+        return _setting_changes(before, after, ()) or ["Only comments or formatting change."]
     from .facts import Facts  # noqa: PLC0415  # facts imports this module
 
     a, b = Facts(before), Facts(after)
     out = [f"Adds claim `{c}`: {b.claims[c].text}" for c in b.claims if c not in a.claims]
     out += [f"Removes claim `{c}`: {a.claims[c].text}" for c in a.claims if c not in b.claims]
     out += [f"Rewords claim `{c}`" for c in a.claims if c in b.claims and a.claims[c].text != b.claims[c].text]
-    out += [f"Changes `{s}`" for s in ("contact", "education", "skills") if before.get(s) != after.get(s)]
-
-    def details(entry: dict[str, Any]) -> dict[str, Any]:
-        return {k: v for k, v in entry.items() if k != "claims"}
+    for s in ("contact", "skills"):
+        out += _setting_changes(before.get(s), after.get(s), (s,))
+    if before.get("education") != after.get("education"):
+        out.append("Changes `education`")
 
     old_entries = {e["id"]: e for e in [*before["experience"], *before["projects"]]}
     new_entries = {e["id"]: e for e in [*after["experience"], *after["projects"]]}
     for i, e in new_entries.items():
         if i not in old_entries:
             out.append(f"Adds entry `{i}`")
-        elif details(e) != details(old_entries[i]):
-            out.append(f"Changes details of `{i}` (title, dates, stack, ...)")
+            continue
+        old_entry = old_entries[i]
+        if changed := [k for k in {**old_entry, **e} if k != "claims" and old_entry.get(k) != e.get(k)]:
+            out.append(f"Changes {', '.join(changed)} of `{i}`")
+        if _reordered([c["id"] for c in old_entry["claims"]], [c["id"] for c in e["claims"]]):
+            out.append(f"Reorders the claims of `{i}`")
     out += [f"Removes entry `{i}`" for i in old_entries if i not in new_entries]
+    # The base resume lists entries in facts order.
+    out += [
+        f"Reorders {s}"
+        for s in ("experience", "projects")
+        if _reordered([e["id"] for e in before[s]], [e["id"] for e in after[s]])
+    ]
     return out or ["Only comments or formatting change."]
+
+
+def _reordered(old: list[str], new: list[str]) -> bool:
+    """Whether the ids in both lists come in a different order."""
+    both = set(old) & set(new)
+    return [i for i in old if i in both] != [i for i in new if i in both]
+
+
+def _short(value: object) -> str:
+    text = " ".join(str(value).split())
+    return text if len(text) <= SHORT else text[: SHORT - 3] + "..."
+
+
+def _setting_changes(before: object, after: object, path: tuple[str, ...]) -> list[str]:
+    """Preference changes setting by setting: `triage.min_relevance`: 3 -> 4."""
+    if isinstance(before, dict) and isinstance(after, dict):
+        return [
+            line
+            for k in [*before, *(k for k in after if k not in before)]
+            for line in _setting_changes(before.get(k), after.get(k), (*path, str(k)))
+        ]
+    if before == after:
+        return []
+    name = ".".join(path)
+    if isinstance(before, list) and isinstance(after, list):
+        return [f"Adds `{_short(v)}` to `{name}`" for v in after if v not in before] + [
+            f"Removes `{_short(v)}` from `{name}`" for v in before if v not in after
+        ] or [f"Reorders `{name}`"]
+    if before is None:
+        change = f"Adds `{name}`: {_short(after)}"
+    elif after is None:
+        change = f"Removes `{name}`"
+    elif isinstance(before, str) and len(before) > SHORT:
+        change = f"Rewords `{name}`"
+    else:
+        change = f"Changes `{name}`: {_short(before)} → {_short(after)}"
+    return [change]
 
 
 def check(kind: str, body: str) -> None:
@@ -136,6 +180,10 @@ def check(kind: str, body: str) -> None:
         if missing := [s for s in PREFS_SECTIONS if s not in data]:
             msg = f"preferences is missing: {', '.join(missing)}"
             raise ValueError(msg)
+        from .profile_edit import preference_problems  # noqa: PLC0415  # profile_edit imports llm, which is slow
+
+        if problems := preference_problems(data):
+            raise ValueError("; ".join(problems))
         return
     from .facts import Facts  # noqa: PLC0415  # facts imports this module
 

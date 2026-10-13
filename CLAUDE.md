@@ -55,6 +55,13 @@ ignores; when a `# noqa` is truly needed, use the bare code. Comments explain *w
 - `letter.py`: cover letters. `asks_for_letter` decides in code; the user's wording is
   `PARAGRAPHS`, and Claude fills only `Phrases` from the tailored resume, never the full
   facts. Keep it that way: more context costs tokens and invites claims the check can't see.
+- `profile_edit.py` edits profile YAML through ruamel's round-trip loader so comments
+  survive; a comment block right above a `- key:` list item is that item's note (a
+  `__note__` key while editing) and moves with it. Form edits must go through it, never
+  `yaml.safe_dump`, which would drop the verification comments. Preference settings
+  are declared once in `PREFERENCES`: a new setting is one `Field`, which gives it a
+  form widget and a check. `profile_forms.py` renders the forms; edits change the
+  draft only, and saving still goes through `profile_review`.
 - `fit.py` measures the compiled PDF (pdftotext, pdfinfo) to trim skill rows and projects.
 - `db.py`: new `jobs` columns go in `SCHEMA` and are added to existing databases
   automatically, so they must be nullable or have a default. Dynamic SQL only accepts known
