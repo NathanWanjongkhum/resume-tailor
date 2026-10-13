@@ -23,6 +23,12 @@ Paused postings ─► recheck: reopened → back in line | gone → filtered
   writes resumes only for the best few each run.
 - **One page, measured.** The resume is compiled and measured (`tailor/fit.py`),
   then skill rows and projects are trimmed until it fits.
+- **Cover letters where asked.** When a posting asks for a cover letter (found
+  in code), the letter is built from the template in `tailor/letter.py`: code
+  fills in the contact block, date, greeting, education and sign-off, and Claude
+  writes only four short phrases from a trimmed posting and the resume it
+  already tailored, checked like bullets. Add `address:` (multi-line) under
+  `contact` in your facts for a street address; otherwise `location` is used.
 - **Resumable runs.** Each stage commits per job and only picks up pending work,
   so a stopped, killed or crashed run resumes where it left off.
 - **Follows up for you.** Replies in Gmail move applications through interview,
@@ -36,10 +42,11 @@ Paused postings ─► recheck: reopened → back in line | gone → filtered
 | `examples/facts.yaml` | format of your facts: every claim you're willing to make (fictional example) |
 | `examples/preferences.yaml` | format of your preferences: Gmail query, filters, thresholds, wants and avoid |
 | `templates/resume.tex.j2` | layout (Jake's Resume template, Jinja delimiters `((( )))` / `((* *))`) |
+| `templates/cover_letter.tex.j2` | cover letter layout; its wording is in `tailor/letter.py` |
 | `tailor/` | pipeline code; `tailor/pipeline.py` has the stages |
 | `deploy/` | systemd user units: the pipeline timer and the dashboard |
 | `data/jobs.db` | all state, including your uploaded profile (not committed) |
-| `out/` | one folder per generated resume: `resume.pdf`, `report.md`, `posting.txt`, ... (not committed) |
+| `out/` | one folder per generated resume: `resume.pdf`, `report.md`, `posting.txt`, `cover_letter.pdf`, ... (not committed) |
 
 ## Setup
 
@@ -96,6 +103,7 @@ locked, also save an encrypted systemd credential, then rerun `install.sh`:
     uv run python -m tailor list [status]    # jobs and scores
     uv run python -m tailor add <url>        # one posting by URL
     uv run python -m tailor gen <job id>     # tailor one job now, whatever its scores
+    uv run python -m tailor letter <job id>  # write a cover letter for a job's resume
     uv run python -m tailor job posting.txt  # one-off, no database
     uv run python -m tailor dashboard        # if not running as a service
 

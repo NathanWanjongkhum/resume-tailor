@@ -23,7 +23,7 @@ from streamlit.delta_generator import DeltaGenerator
 # Streamlit runs this file as a script, so make the package importable.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from tailor import control, db, github, llm, pipeline, preview, profile, progress, tracking, triage
+from tailor import control, db, github, letter, llm, pipeline, preview, profile, progress, tracking, triage
 from tailor.facts import Facts
 from tailor.paths import OUT
 
@@ -210,6 +210,20 @@ def write_resume(job: Job) -> None:
     st.rerun()
 
 
+def write_letter(job: Job) -> None:
+    with st.spinner(f"Writing a cover letter for {job['company'] or job['title']}…"):
+        try:
+            with pipeline.exclusive():
+                via, effort = generation_settings()
+                pipeline.write_letter(db_conn(), job["id"], Facts(), via, effort)
+            flash("success", f"Cover letter written for {job['company']}. It's in the Cover letter tab.")
+        except pipeline.AlreadyRunningError:
+            flash("error", "The pipeline is running; try again when it finishes.")
+        except pipeline.JobError as e:
+            flash("error", f"Couldn't write the cover letter: {e}")
+    st.rerun()
+
+
 def set_status(job: Job, status: str) -> None:
     tracking.set_status(db_conn(), job["id"], status)
     flash("success", f"{job['company']}: marked {STATUS_LABELS[status].lower()}.")
@@ -229,10 +243,10 @@ def launch(*, start_stage: str = "ingest", skip_ingest: bool = False) -> None:
 # stale when its out/ folder is deleted by hand.
 @st.cache_resource(show_spinner=False)
 def prune_previews() -> None:
-    preview.prune(OUT.glob("*/resume.pdf"))
+    preview.prune([*OUT.glob("*/resume.pdf"), *OUT.glob(f"*/{letter.NAME}.pdf")])
 
 
-def pdf_viewer(pdf: Path) -> None:
+def pdf_viewer(pdf: Path, title: str = "Resume PDF") -> None:
     """The browser's own PDF viewer, so links, zoom and text search work.
 
     st.iframe can't be used: it sandboxes the frame, and Chrome refuses to show a PDF in a
@@ -243,7 +257,7 @@ def pdf_viewer(pdf: Path) -> None:
     """
     url = preview.publish(pdf)
     st.markdown(
-        f'<iframe src="{url}" title="Resume PDF" style="width:100%;aspect-ratio:{PDF_ASPECT};border:0"></iframe>',
+        f'<iframe src="{url}" title="{title}" style="width:100%;aspect-ratio:{PDF_ASPECT};border:0"></iframe>',
         unsafe_allow_html=True,
     )
 
@@ -330,7 +344,8 @@ def resume_card(job: Job, *, selected: bool) -> None:
     with st.container(border=True, key=f"{'picked' if selected else 'card'}-{job['id']}"):
         st.markdown(f"**{md(job['company'] or 'Unknown company')}**  \n{md(job['title'])}")
         failed = " :red-badge[Check failed]" if job["checks_ok"] == 0 else ""
-        st.markdown(f"{score_badges(job)}{failed}")
+        asks = " :blue-badge[:material/mail: Cover letter]" if letter.asks_for_letter(job["posting"] or "") else ""
+        st.markdown(f"{score_badges(job)}{failed}{asks}")
         if not selected:
             st.button(
                 f"Open {job['company'] or 'resume'}",
@@ -339,9 +354,13 @@ def resume_card(job: Job, *, selected: bool) -> None:
             )
 
 
-def resume_actions(job: Job, pdf: Path) -> None:
+def download_name(job: Job, what: str) -> str:
     last_name = Facts().raw["contact"]["name"].split()[-1]
-    filename = re.sub(r"[^A-Za-z0-9]+", "_", f"{last_name} Resume {job['company'] or ''}").strip("_")
+    return re.sub(r"[^A-Za-z0-9]+", "_", f"{last_name} {what} {job['company'] or ''}").strip("_")
+
+
+def resume_actions(job: Job, pdf: Path) -> None:
+    filename = download_name(job, "Resume")
     with st.container(horizontal=True, gap="small"):
         st.download_button(
             "Download PDF",
@@ -388,6 +407,47 @@ def checks_tab(outdir: Path) -> None:
             st.markdown(md(body) or "—")
 
 
+def cover_letter_tab(job: Job, outdir: Path) -> None:
+    asks = letter.asks_for_letter(job["posting"] or "")
+    saved = letter.load(outdir)
+    busy = pipeline.is_running()
+    if saved is None:
+        st.markdown("The posting asks for a cover letter." if asks else "The posting doesn't mention a cover letter.")
+        if st.button(
+            "Write cover letter",
+            type="primary" if asks else "secondary",
+            icon=":material/edit_note:",
+            disabled=busy,
+            help="Under a minute; uses your Claude plan",
+        ):
+            write_letter(job)
+        return
+    for error in saved["errors"]:
+        st.error(md(error))
+    for warning in saved["warnings"]:
+        st.warning(md(warning))
+    pdf, text = outdir / f"{letter.NAME}.pdf", (outdir / f"{letter.NAME}.txt").read_text()
+    filename = download_name(job, "Cover Letter")
+    with st.container(horizontal=True, gap="small"):
+        if pdf.exists():
+            st.download_button(
+                "Download PDF",
+                pdf.read_bytes(),
+                f"{filename}.pdf",
+                "application/pdf",
+                type="primary",
+                icon=":material/download:",
+                key="letter-pdf",
+            )
+        st.download_button("Download .txt", text, f"{filename}.txt", "text/plain", key="letter-txt")
+        if st.button("Rewrite", disabled=busy, help="Write a fresh version (uses your plan)", key="letter-rewrite"):
+            write_letter(job)
+    with st.expander("Plain text, for application forms"):
+        st.code(text, language=None, wrap_lines=True)
+    if pdf.exists():
+        pdf_viewer(pdf, "Cover letter PDF")
+
+
 def resume_detail(job: Job) -> None:
     job_heading(job)
     outdir = Path(job["outdir"])
@@ -398,9 +458,13 @@ def resume_detail(job: Job) -> None:
     if not job["posting_ok"]:
         st.info("Written from the email summary only; the full posting couldn't be fetched.")
     resume_actions(job, pdf)
-    resume_tab, why, checks, posting = st.tabs(["Resume", "Why it fits", "Checks & changes", "Posting"])
+    resume_tab, cover, why, checks, posting = st.tabs(
+        ["Resume", "Cover letter", "Why it fits", "Checks & changes", "Posting"]
+    )
     with resume_tab:
         pdf_viewer(pdf)
+    with cover:
+        cover_letter_tab(job, outdir)
     with why:
         why_tab(outdir)
     with checks:

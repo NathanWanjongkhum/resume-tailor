@@ -91,8 +91,17 @@ def term_re(term: str) -> re.Pattern[str]:
     return re.compile(rf"(?<![\w+#]){re.escape(term)}(?![\w+#])", flags)
 
 
-def _numbers(text: str) -> set[str]:
+def numbers(text: str) -> set[str]:
     return {n.replace(" ", "") for n in _NUM_RE.findall(text)}
+
+
+def tech_terms(facts: Facts) -> list[tuple[str, re.Pattern[str]]]:
+    """Every technology a generated sentence might mention, with its pattern."""
+    vocab = set(facts.skill_pool()) | set(EXTRA_TECH)
+    for e in [*facts.experience.values(), *facts.projects.values()]:
+        vocab |= set(e["stack"])
+    # Single letters ("C", "R") match too much prose to be useful.
+    return [(v, term_re(v)) for v in sorted(vocab) if len(v) > 1]
 
 
 class _Checker:
@@ -100,11 +109,7 @@ class _Checker:
         self.facts = facts
         self.rep = Report()
         self.used: set[str] = set()
-        vocab = set(facts.skill_pool()) | set(EXTRA_TECH)
-        for e in [*facts.experience.values(), *facts.projects.values()]:
-            vocab |= set(e["stack"])
-        # Single letters ("C", "R") match too much prose to be useful.
-        self.vocab = [(v, term_re(v)) for v in sorted(vocab) if len(v) > 1]
+        self.vocab = tech_terms(facts)
 
     def bullets(self, entry_id: str, bullets: list[Bullet]) -> None:
         stack_text = " ".join(self.facts.entry(entry_id)["stack"])
@@ -119,7 +124,7 @@ class _Checker:
             if b.claim_id in self.used:
                 self.rep.errors.append(f"{where}: claim cited twice")
             self.used.add(b.claim_id)
-            if extra := _numbers(b.text) - _numbers(claim.text) - _numbers(stack_text):
+            if extra := numbers(b.text) - numbers(claim.text) - numbers(stack_text):
                 self.rep.errors.append(f"{where}: numbers not in the source claim: {sorted(extra)}")
             for term, pattern in self.vocab:
                 if pattern.search(b.text) and not pattern.search(claim.text) and not pattern.search(stack_text):

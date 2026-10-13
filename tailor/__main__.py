@@ -10,6 +10,7 @@
   tailor add <url>              add one posting by URL
   tailor ingest-file <file> --sender <addr>     ingest a saved alert email (testing)
   tailor gen <job id>           tailor a resume for one job now (any status)
+  tailor letter <job id>        write a cover letter for a job's resume
   tailor list [status]          show jobs
   tailor job <posting.txt>      one-off resume from a text file (no database)
   tailor base                   render the untailored resume
@@ -29,7 +30,7 @@ import sys
 from collections.abc import Callable
 from pathlib import Path
 
-from . import db, github, gmail, llm, pipeline, profile, progress, tracking, triage
+from . import db, github, gmail, letter, llm, pipeline, profile, progress, tracking, triage
 from .facts import Facts
 from .output import build, produce
 from .paths import OUT, ROOT
@@ -66,6 +67,7 @@ def _parser() -> argparse.ArgumentParser:
     imp.add_argument("--yes", action="store_true", help="replace the stored copy without asking")
     prof.add_parser("export").add_argument("kind", choices=profile.KINDS)
     sub.add_parser("gen").add_argument("job_id")
+    sub.add_parser("letter").add_argument("job_id")
     sub.add_parser("list").add_argument("status", nargs="?")
     job = sub.add_parser("job")
     job.add_argument("posting", type=Path)
@@ -119,9 +121,13 @@ def cmd_base(_args: argparse.Namespace) -> None:
 
 
 def cmd_job(args: argparse.Namespace) -> None:
-    outdir, rep, _ = produce(args.posting.read_text(), args.posting.stem, Facts(), via=llm.backend(args.backend))
+    posting, facts, via = args.posting.read_text(), Facts(), llm.backend(args.backend)
+    outdir, rep, _ = produce(posting, args.posting.stem, facts, via=via)
     print(f"wrote {outdir}")
     print("checks:", "PASS" if rep.ok else f"{len(rep.errors)} errors, see report.md")
+    if letter.asks_for_letter(posting):
+        rep = letter.write(outdir, facts, employer=None, via=via)
+        print("cover letter:", "PASS" if rep.ok else f"{len(rep.errors)} errors, see cover_letter.json")
 
 
 def cmd_run(args: argparse.Namespace) -> None:
@@ -207,6 +213,12 @@ def cmd_gen(args: argparse.Namespace) -> None:
     print("wrote", pipeline.generate_one(db.connect(), args.job_id, Facts(), via, effort))
 
 
+def cmd_letter(args: argparse.Namespace) -> None:
+    g = triage.load_prefs()["generate"]
+    via, effort = llm.backend(g["backend"]), llm.effort(g.get("effort", "high"))
+    print("wrote", pipeline.write_letter(db.connect(), args.job_id, Facts(), via, effort) / f"{letter.NAME}.pdf")
+
+
 def cmd_list(args: argparse.Namespace) -> None:
     for r in db.jobs(db.connect(), args.status):
         score = f"{r['relevance']}/{r['desirability']}" if r["relevance"] is not None else "  -  "
@@ -237,6 +249,7 @@ COMMANDS: dict[str, Callable[[argparse.Namespace], None]] = {
     "triage": cmd_triage,
     "generate": cmd_generate,
     "gen": cmd_gen,
+    "letter": cmd_letter,
     "list": cmd_list,
 }
 

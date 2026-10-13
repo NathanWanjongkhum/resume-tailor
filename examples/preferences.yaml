@@ -46,6 +46,9 @@ generate:
   effort: low              # low | medium | high; raise if resume wording gets worse
   max_per_run: 3           # caps plan usage per pipeline run
   require_full_posting: true  # skip jobs where only the email summary was available
+  # Also write a cover letter when the posting asks for one (one more, smaller call
+  # per such job). Any resume can get one from the dashboard's Cover letter tab.
+  cover_letters: true
 
 # Optional. Applications are followed through replies in Gmail (read-only): emails that
 # name the company of a job you have a resume for or applied to are read, sorted by

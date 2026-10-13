@@ -10,7 +10,8 @@ left off::
     fetch    new jobs without a posting -> full posting text (or the email summary)
     triage   new jobs -> filtered | triaged (with scores), best-ranked first, capped per run
     recheck  paused postings (up, but not taking applications) -> back where they were | filtered
-    generate best triaged jobs still open -> generated (tailored resume in out/)
+    generate best triaged jobs still open -> generated (tailored resume in out/, and a
+             cover letter when the posting asks for one)
 
 Postings found not taking applications at any step are paused rather than dropped,
 since some reopen; only a removed or expired posting counts as closed.
@@ -28,7 +29,7 @@ from typing import Any, cast
 
 import anthropic
 
-from . import company, db, gmail, llm, sources, tracking, triage
+from . import company, db, gmail, letter, llm, sources, tracking, triage
 from .facts import Facts
 from .output import produce
 from .paths import DATA
@@ -291,9 +292,16 @@ def company_profile(conn: sqlite3.Connection, row: sqlite3.Row) -> str | None:
     return info
 
 
-def generate_one(
-    conn: sqlite3.Connection, job_id: str, facts: Facts, via: llm.Backend = "plan", effort: llm.Effort = "high"
+def generate_one(  # noqa: PLR0913
+    conn: sqlite3.Connection,
+    job_id: str,
+    facts: Facts,
+    via: llm.Backend = "plan",
+    effort: llm.Effort = "high",
+    *,
+    cover_letter: bool = True,
 ) -> Path:
+    """Write the job's resume, plus a cover letter if `cover_letter` and the posting asks for one."""
     row = db.get_required(conn, job_id)
     header = (
         f"**{row['title']}** at **{row['company'] or 'unknown company'}**, {row['location'] or ''}  \n"
@@ -315,6 +323,24 @@ def generate_one(
         raise
     done = {} if reviewed else {"status": "generated"}
     db.update(conn, job_id, **done, outdir=str(outdir), checks_ok=int(rep.ok), model=model, error=None)
+    if cover_letter and letter.asks_for_letter(row["posting"] or ""):
+        try:
+            letter.write(outdir, facts, employer=row["company"], via=via, effort=effort)
+        except JobError:  # the resume is done; the dashboard offers to write the letter again
+            log.exception("cover letter for %s failed", job_id)
+    return outdir
+
+
+def write_letter(
+    conn: sqlite3.Connection, job_id: str, facts: Facts, via: llm.Backend = "plan", effort: llm.Effort = "high"
+) -> Path:
+    """Write (or rewrite) the cover letter next to the job's resume, whether or not the posting asks."""
+    row = db.get_required(conn, job_id)
+    if not row["outdir"]:
+        msg = f"{job_id} has no resume yet; the letter is written from it"
+        raise ValueError(msg)
+    outdir = Path(row["outdir"])
+    letter.write(outdir, facts, employer=row["company"], via=via, effort=effort)
     return outdir
 
 
@@ -344,6 +370,7 @@ def generate(conn: sqlite3.Connection, prefs: triage.Prefs, facts: Facts, p: Pro
     via = llm.backend(prefs["generate"]["backend"])
     effort = llm.effort(prefs["generate"].get("effort", "high"))
     cap = prefs["generate"]["max_per_run"]
+    letters = bool(prefs["generate"].get("cover_letters", True))
     close_awaiting(conn, p)
     rows = queue(conn, prefs)
     p.stage("generate", min(cap, len(rows)))
@@ -371,7 +398,7 @@ def generate(conn: sqlite3.Connection, prefs: triage.Prefs, facts: Facts, p: Pro
             continue
         tried += 1
         try:
-            generate_one(conn, row["id"], facts, via, effort)
+            generate_one(conn, row["id"], facts, via, effort, cover_letter=letters)
             done += 1
         except JobError:
             log.exception("generate %s failed", row["id"])

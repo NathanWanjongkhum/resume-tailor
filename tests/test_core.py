@@ -379,7 +379,7 @@ def test_generate_skips_closed_postings_and_fills_the_cap(tmp_path: Path, monkey
     states = {"t:1": "closed", "t:2": "paused"}
     monkeypatch.setattr(sources, "posting_state", lambda job: states.get(job["id"], "open"))
     made: list[str] = []
-    monkeypatch.setattr(pipeline, "generate_one", lambda _conn, job_id, *_args: made.append(job_id))
+    monkeypatch.setattr(pipeline, "generate_one", lambda _conn, job_id, *_args, **_kw: made.append(job_id))
     prefs = load_prefs()
     prefs["generate"]["max_per_run"] = 2
     assert pipeline.generate(conn, prefs, Facts()) == 2

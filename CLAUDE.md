@@ -6,7 +6,7 @@ README.md covers setup and usage; this file covers what isn't obvious from the c
 ## Before you change anything
 
 - **Ask before running anything that calls Claude**: `tailor run`, `triage`, `generate`, `gen`,
-  `job`, or dashboard Run/Generate. They spend the user's Claude plan usage, and the user has
+  `letter`, `job`, or dashboard Run/Generate/Write cover letter. They spend the user's Claude plan usage, and the user has
   asked for runs to stop when they took too long. Tests and `tailor base` are free.
 - **The profile lives in `data/jobs.db`, not the repo** (`profile.py`, table `profile`). The
   user uploads facts and preferences with `tailor profile import` or the dashboard; `examples/`
@@ -52,6 +52,9 @@ ignores; when a `# noqa` is truly needed, use the bare code. Comments explain *w
   so prose like "the rest" doesn't count as REST.
 - `company.py` reads the employer's public LinkedIn page at generate time (LinkedIn jobs
   only), cached in `jobs.company_info`. The writer gets it as `<company>` for ranking only.
+- `letter.py`: cover letters. `asks_for_letter` decides in code; the user's wording is
+  `PARAGRAPHS`, and Claude fills only `Phrases` from the tailored resume, never the full
+  facts. Keep it that way: more context costs tokens and invites claims the check can't see.
 - `fit.py` measures the compiled PDF (pdftotext, pdfinfo) to trim skill rows and projects.
 - `db.py`: new `jobs` columns go in `SCHEMA` and are added to existing databases
   automatically, so they must be nullable or have a default. Dynamic SQL only accepts known
