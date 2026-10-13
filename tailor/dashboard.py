@@ -243,10 +243,10 @@ def launch(*, start_stage: str = "ingest", skip_ingest: bool = False) -> None:
 # stale when its out/ folder is deleted by hand.
 @st.cache_resource(show_spinner=False)
 def prune_previews() -> None:
-    preview.prune([*OUT.glob("*/resume.pdf"), *OUT.glob(f"*/{letter.NAME}.pdf")])
+    preview.prune(OUT.glob("*/resume.pdf"))
 
 
-def pdf_viewer(pdf: Path, title: str = "Resume PDF") -> None:
+def pdf_viewer(pdf: Path) -> None:
     """The browser's own PDF viewer, so links, zoom and text search work.
 
     st.iframe can't be used: it sandboxes the frame, and Chrome refuses to show a PDF in a
@@ -257,7 +257,7 @@ def pdf_viewer(pdf: Path, title: str = "Resume PDF") -> None:
     """
     url = preview.publish(pdf)
     st.markdown(
-        f'<iframe src="{url}" title="{title}" style="width:100%;aspect-ratio:{PDF_ASPECT};border:0"></iframe>',
+        f'<iframe src="{url}" title="Resume PDF" style="width:100%;aspect-ratio:{PDF_ASPECT};border:0"></iframe>',
         unsafe_allow_html=True,
     )
 
@@ -426,26 +426,21 @@ def cover_letter_tab(job: Job, outdir: Path) -> None:
         st.error(md(error))
     for warning in saved["warnings"]:
         st.warning(md(warning))
-    pdf, text = outdir / f"{letter.NAME}.pdf", (outdir / f"{letter.NAME}.txt").read_text()
-    filename = download_name(job, "Cover Letter")
+    text = (outdir / f"{letter.NAME}.txt").read_text()
     with st.container(horizontal=True, gap="small"):
-        if pdf.exists():
-            st.download_button(
-                "Download PDF",
-                pdf.read_bytes(),
-                f"{filename}.pdf",
-                "application/pdf",
-                type="primary",
-                icon=":material/download:",
-                key="letter-pdf",
-            )
-        st.download_button("Download .txt", text, f"{filename}.txt", "text/plain", key="letter-txt")
+        st.download_button(
+            "Download .txt",
+            text,
+            f"{download_name(job, 'Cover Letter')}.txt",
+            "text/plain",
+            type="primary",
+            icon=":material/download:",
+            key="letter-txt",
+        )
         if st.button("Rewrite", disabled=busy, help="Write a fresh version (uses your plan)", key="letter-rewrite"):
             write_letter(job)
-    with st.expander("Plain text, for application forms"):
-        st.code(text, language=None, wrap_lines=True)
-    if pdf.exists():
-        pdf_viewer(pdf, "Cover letter PDF")
+    # st.code's copy button is the one-click copy.
+    st.code(text, language=None, wrap_lines=True)
 
 
 def resume_detail(job: Job) -> None:
