@@ -407,6 +407,20 @@ def checks_tab(outdir: Path) -> None:
             st.markdown(md(body) or "—")
 
 
+# Streamlit has no copy button. This one reads the text from the page rather than having it
+# pasted into the script, so nothing from a job ends up in JavaScript. Styled like st.button.
+COPY_LETTER = """<button id="letter-copy" type="button" style="font:inherit;color:#1f2937;background:#fff;
+border:1px solid #e5e7eb;border-radius:0.5rem;min-height:2.5rem;padding:0.25rem 0.75rem;cursor:pointer">Copy</button>
+<script>
+document.getElementById("letter-copy").onclick = async (event) => {
+  const text = document.querySelector(".st-key-letter-text code").innerText;
+  await navigator.clipboard.writeText(text);
+  event.target.textContent = "Copied";
+  setTimeout(() => { event.target.textContent = "Copy"; }, 1500);
+};
+</script>"""
+
+
 def cover_letter_tab(job: Job, outdir: Path) -> None:
     asks = letter.asks_for_letter(job["posting"] or "")
     saved = letter.load(outdir)
@@ -437,10 +451,11 @@ def cover_letter_tab(job: Job, outdir: Path) -> None:
             icon=":material/download:",
             key="letter-txt",
         )
+        st.html(COPY_LETTER, width="content", unsafe_allow_javascript=True)
         if st.button("Rewrite", disabled=busy, help="Write a fresh version (uses your plan)", key="letter-rewrite"):
             write_letter(job)
-    # st.code's copy button is the one-click copy.
-    st.code(text, language=None, wrap_lines=True)
+    with st.container(key="letter-text"):
+        st.code(text, language=None, wrap_lines=True)
 
 
 def resume_detail(job: Job) -> None:
