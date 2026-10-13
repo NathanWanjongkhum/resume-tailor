@@ -47,6 +47,14 @@ generate:
   max_per_run: 3           # caps plan usage per pipeline run
   require_full_posting: true  # skip jobs where only the email summary was available
 
+# Optional. Applications are followed through replies in Gmail (read-only): emails that
+# name the company of a job you have a resume for or applied to are read, sorted by
+# phrase rules (no Claude calls), and move the job to interview, offer, hired or not
+# selected. Postings that are up but not taking applications are rechecked every run.
+tracking:
+  query: -category:promotions  # extra Gmail search terms for replies
+  pending_days: 30         # stop rechecking a paused posting after this long
+
 wants: |
   Entry-level or new-grad software roles: full-stack web, backend, or cloud.
   Remote, or on-site/hybrid near Portland, OR.

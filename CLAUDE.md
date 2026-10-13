@@ -33,9 +33,15 @@ ignores; when a `# noqa` is truly needed, use the bare code. Comments explain *w
 
 ## How it fits together
 
-- `pipeline.py`: stages ingest → filter → fetch → triage → generate. Each stage only picks
-  up pending work and commits per job, so any stage can be rerun and a stopped run resumes
-  where it left off. Per-job failures are caught via `JobError`; anything else fails the run.
+- `pipeline.py`: stages ingest → track → filter → fetch → triage → recheck → generate. Each
+  stage only picks up pending work and commits per job, so any stage can be rerun and a
+  stopped run resumes where it left off. Per-job failures are caught via `JobError`; anything
+  else fails the run, except Gmail failures in ingest and track (`GMAIL_STAGES`).
+- `tracking.py`: replies in Gmail → `events` rows → application status, by phrase rules
+  (no Claude calls). Statuses only move forward (`RANK`) unless set by hand through
+  `tracking.set_status`, which also logs the change. A posting that's up but not taking
+  applications is `paused` (with `paused_from`), not `filtered`: `sources.posting_state`
+  returns open | paused | closed, and only closed drops a job.
 - `progress.py`: the `runs` table, graceful stop (SIGTERM sets a flag checked by
   `Progress.item()` between items), kill (`stop --now`), and `recover()` (dead pid →
   `interrupted`; deletes `out/*.partial`). New loops over jobs must call `p.item()` and

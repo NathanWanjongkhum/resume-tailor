@@ -1,10 +1,12 @@
 """CLI.
 
-  tailor run [--from STAGE]     pipeline: ingest -> filter -> fetch -> triage -> generate
+  tailor run [--from STAGE]     pipeline: ingest -> track -> filter -> fetch -> triage -> recheck -> generate
   tailor status                 current or last run, with progress
   tailor stop [--now]           stop after the current item (or kill now)
   tailor retry                  send errored jobs back to the stage they failed in
-  tailor ingest | fetch | triage | generate     one stage
+  tailor ingest | track | fetch | triage | recheck | generate     one stage
+  tailor mark <job id> <status> set a status by hand, e.g. interview or not_selected
+  tailor replies <job id>       what's happened with an application
   tailor add <url>              add one posting by URL
   tailor ingest-file <file> --sender <addr>     ingest a saved alert email (testing)
   tailor gen <job id>           tailor a resume for one job now (any status)
@@ -27,7 +29,7 @@ import sys
 from collections.abc import Callable
 from pathlib import Path
 
-from . import db, github, gmail, llm, pipeline, profile, progress, triage
+from . import db, github, gmail, llm, pipeline, profile, progress, tracking, triage
 from .facts import Facts
 from .output import build, produce
 from .paths import OUT, ROOT
@@ -47,8 +49,12 @@ def _parser() -> argparse.ArgumentParser:
     sub.add_parser("stop").add_argument("--now", action="store_true", help="kill instead of finishing the current item")
     sub.add_parser("status")
     sub.add_parser("retry").add_argument("--reset-attempts", action="store_true")
-    for name in ("ingest", "fetch", "triage", "generate", "base", "github", "dashboard"):
+    for name in ("ingest", "track", "fetch", "triage", "recheck", "generate", "base", "github", "dashboard"):
         sub.add_parser(name)
+    mark = sub.add_parser("mark")
+    mark.add_argument("job_id")
+    mark.add_argument("status", choices=db.STATUSES)
+    sub.add_parser("replies").add_argument("job_id")
     sub.add_parser("add").add_argument("url")
     f = sub.add_parser("ingest-file")
     f.add_argument("file", type=Path)
@@ -157,6 +163,26 @@ def cmd_ingest_file(args: argparse.Namespace) -> None:
     print("new jobs:", pipeline.ingest_text(db.connect(), msg))
 
 
+def cmd_track(_args: argparse.Namespace) -> None:
+    print("applications moved on:", pipeline.track(db.connect(), triage.load_prefs(), Facts()))
+
+
+def cmd_recheck(_args: argparse.Namespace) -> None:
+    print("reopened:", pipeline.recheck(db.connect(), triage.load_prefs()))
+
+
+def cmd_mark(args: argparse.Namespace) -> None:
+    tracking.set_status(db.connect(), args.job_id, args.status)
+    print(f"{args.job_id}: {args.status}")
+
+
+def cmd_replies(args: argparse.Namespace) -> None:
+    conn = db.connect()
+    print(f"{args.job_id}: {db.get_required(conn, args.job_id)['status']}")
+    for e in db.events(conn, args.job_id):
+        print(f"  {e['at'][:10]} {e['kind']:12} {e['source']:6} {e['subject'] or ''}")
+
+
 def cmd_add(args: argparse.Namespace) -> None:
     print("added:", pipeline.add_url(db.connect(), args.url))
 
@@ -185,7 +211,7 @@ def cmd_list(args: argparse.Namespace) -> None:
     for r in db.jobs(db.connect(), args.status):
         score = f"{r['relevance']}/{r['desirability']}" if r["relevance"] is not None else "  -  "
         print(
-            f"{r['status']:9} {score:5} {'full' if r['posting_ok'] else 'part'} "
+            f"{r['status']:12} {score:5} {'full' if r['posting_ok'] else 'part'} "
             f"{r['id']:28} {(r['company'] or '?')[:22]:22} {(r['title'] or '?')[:50]}"
         )
 
@@ -202,6 +228,10 @@ COMMANDS: dict[str, Callable[[argparse.Namespace], None]] = {
     "retry": cmd_retry,
     "ingest": cmd_ingest,
     "ingest-file": cmd_ingest_file,
+    "track": cmd_track,
+    "recheck": cmd_recheck,
+    "mark": cmd_mark,
+    "replies": cmd_replies,
     "add": cmd_add,
     "fetch": cmd_fetch,
     "triage": cmd_triage,

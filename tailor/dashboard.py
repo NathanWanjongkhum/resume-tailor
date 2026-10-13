@@ -23,19 +23,24 @@ from streamlit.delta_generator import DeltaGenerator
 # Streamlit runs this file as a script, so make the package importable.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from tailor import control, db, github, llm, pipeline, preview, profile, progress, triage
+from tailor import control, db, github, llm, pipeline, preview, profile, progress, tracking, triage
 from tailor.facts import Facts
 from tailor.paths import OUT
 
 Job = dict[str, Any]
 
 STATUS_LABELS = {
-    "new": "Pending",
+    "new": "New",
     "filtered": "Filtered out",
     "triaged": "Scored",
     "generated": "To review",
     "approved": "Approved",
+    "paused": "Pending",
     "applied": "Applied",
+    "interview": "Interviewing",
+    "offer": "Offer",
+    "hired": "Hired",
+    "not_selected": "Not selected",
     "rejected": "Rejected",
     "error": "Error",
 }
@@ -45,7 +50,12 @@ STATUS_COLORS = {
     "triaged": "blue",
     "generated": "orange",
     "approved": "green",
+    "paused": "orange",
     "applied": "violet",
+    "interview": "blue",
+    "offer": "green",
+    "hired": "green",
+    "not_selected": "gray",
     "rejected": "gray",
     "error": "red",
 }
@@ -55,15 +65,33 @@ STATUS_ICONS = {
     "triaged": "insights",
     "generated": "rate_review",
     "approved": "thumb_up",
+    "paused": "pause_circle",
     "applied": "send",
+    "interview": "forum",
+    "offer": "handshake",
+    "hired": "celebration",
+    "not_selected": "do_not_disturb_on",
     "rejected": "block",
     "error": "error",
 }
+# What each kind of reply in Gmail reads as, on an application's history.
+EVENT_LABELS = {
+    "received": "Application received",
+    "viewed": "Application viewed",
+    "interview": "Interview",
+    "not_selected": "Not selected",
+    "offer": "Offer",
+    "hired": "Hired",
+    "applied": "Marked applied",
+}
+APPLICATION_STATUSES = ("applied", "interview", "offer", "hired", "not_selected")
 STAGE_LABELS = {
     "ingest": "Read Gmail",
+    "track": "Check replies",
     "filter": "Filter",
     "fetch": "Fetch postings",
     "triage": "Score jobs",
+    "recheck": "Recheck pending",
     "generate": "Write resumes",
 }
 RUN_MARKS = {
@@ -183,7 +211,7 @@ def write_resume(job: Job) -> None:
 
 
 def set_status(job: Job, status: str) -> None:
-    db.update(db_conn(), job["id"], status=status)
+    tracking.set_status(db_conn(), job["id"], status)
     flash("success", f"{job['company']}: marked {STATUS_LABELS[status].lower()}.")
     st.rerun()
 
@@ -323,7 +351,7 @@ def resume_actions(job: Job, pdf: Path) -> None:
             type="primary",
             icon=":material/download:",
         )
-        if job["status"] != "applied" and st.button("Mark applied", icon=":material/send:"):
+        if job["status"] not in APPLICATION_STATUSES and st.button("Mark applied", icon=":material/send:"):
             set_status(job, "applied")
         if job["status"] == "generated" and st.button("Approve", icon=":material/check:"):
             set_status(job, "approved")
@@ -335,7 +363,7 @@ def resume_actions(job: Job, pdf: Path) -> None:
             st.download_button("Download .tex", (pdf.parent / "resume.tex").read_bytes(), f"{filename}.tex")
             if st.button("Regenerate", help="Write a fresh version (about a minute, uses your plan)"):
                 write_resume(job)
-            if job["status"] in {"approved", "applied", "rejected"} and st.button("Back to review"):
+            if job["status"] in pipeline.REVIEWED and st.button("Back to review"):
                 set_status(job, "generated")
 
 
@@ -414,7 +442,8 @@ def resumes_page() -> None:
     groups = {
         "To review": [j for j in jobs if j["status"] == "generated"],
         "Approved": [j for j in jobs if j["status"] == "approved"],
-        "Applied": [j for j in jobs if j["status"] == "applied"],
+        "Pending": [j for j in jobs if j["status"] == "paused"],
+        "Applied": [j for j in jobs if j["status"] in APPLICATION_STATUSES],
         "Rejected": [j for j in jobs if j["status"] == "rejected"],
     }
     options = [name for name, items in groups.items() if items or name == "To review"]
@@ -485,6 +514,7 @@ def job_detail(job: Job) -> None:
 JOB_VIEWS = {
     "Scored": lambda j: j["status"] == "triaged",
     "Has resume": lambda j: bool(j["outdir"]),
+    "Pending": lambda j: j["status"] == "paused",
     "Filtered out": lambda j: j["status"] == "filtered",
     "All": lambda _j: True,
 }
@@ -595,7 +625,7 @@ def stage_strip(run: Job) -> None:
     seconds = json.loads(run["stage_seconds"] or "{}")
     for col, (i, name) in zip(st.columns(len(progress.STAGES)), enumerate(progress.STAGES), strict=True):
         with col, st.container(border=True):
-            if i < first or (name == "ingest" and "skip_ingest" in args):
+            if i < first or (name in pipeline.GMAIL_STAGES and "skip_ingest" in args):
                 st.caption(f":material/skip_next: {STAGE_LABELS[name]}  \nskipped")
             elif i < current or (i == current and run["status"] == "done"):
                 st.caption(f":green[:material/check_circle:] {STAGE_LABELS[name]}  \n{duration(seconds.get(name, 0))}")
@@ -1051,6 +1081,182 @@ def profile_page() -> None:
     github_card()
 
 
+def day(iso: str | None) -> str:
+    return "" if iso is None else datetime.fromisoformat(iso).astimezone().strftime("%b %-d")
+
+
+def application_history(job: Job) -> None:
+    events = db.events(db_conn(), job["id"])
+    if not events:
+        st.caption("No replies yet. Gmail is checked for emails naming the company on every run.")
+    for e in events:
+        how = ":material/mail:" if e["source"] == "email" else ":material/edit:"
+        st.markdown(f"{how} **{EVENT_LABELS.get(e['kind'], e['kind'])}** :gray[· {day(e['at'])}]")
+        if e["subject"]:
+            st.caption(md(f"{e['sender']}: {e['subject']}"))
+        if e["evidence"] and e["evidence"] != e["subject"]:
+            st.caption(md(f"“{e['evidence']}”"))
+
+
+def application_detail(job: Job) -> None:
+    job_heading(job)
+    applied = f" :gray[applied {day(job['applied_at'])}]" if job["applied_at"] else ""
+    st.markdown(f"{status_badge(job['status'])}{applied}")
+    with st.container(horizontal=True, gap="small"):
+        if job["outdir"] and st.button("Resume", icon=":material/description:", key=f"resume-{job['id']}"):
+            st.session_state["selected_resume"] = job["id"]
+            st.switch_page(RESUMES_PAGE)
+        if (link := safe_link(job)) is not None:
+            st.link_button("Posting", link, icon=":material/open_in_new:")
+        with st.popover("Set status", icon=":material/edit:"):
+            st.caption("Replies only move an application forward. Fix a misread one here.")
+            for status in APPLICATION_STATUSES:
+                if status != job["status"] and st.button(
+                    STATUS_LABELS[status], icon=f":material/{STATUS_ICONS[status]}:", key=f"set-{status}-{job['id']}"
+                ):
+                    set_status(job, status)
+    st.markdown("**History**")
+    application_history(job)
+
+
+def pending_detail(job: Job) -> None:
+    job_heading(job)
+    was = STATUS_LABELS.get(job["paused_from"] or "new", job["paused_from"])
+    days = triage.load_prefs().get("tracking", {}).get("pending_days", pipeline.PENDING_DAYS)
+    st.markdown(
+        f"{status_badge('paused')} :gray[not taking applications since {day(job['paused_at'])}; was {was.lower()}]"
+    )
+    st.caption(
+        f"The posting is still up but closed to applications. Each run checks it again: if it reopens, "
+        f"it goes back to {was.lower()}; if it's removed, or still paused after {days} days, it's filtered out."
+    )
+    with st.container(horizontal=True, gap="small"):
+        if st.button("Check now", icon=":material/refresh:", key=f"recheck-{job['id']}"):
+            with st.spinner("Checking the posting…"):
+                state = pipeline.recheck_one(db_conn(), db.get_required(db_conn(), job["id"]), int(days))
+            outcome = {"open": "it's taking applications again", "closed": "it's been removed"}
+            flash("info", f"{job['company']}: {outcome.get(state or '', 'still not taking applications')}.")
+            st.rerun()
+        if (link := safe_link(job)) is not None:
+            st.link_button("Posting", link, icon=":material/open_in_new:")
+        if st.button("Stop watching", icon=":material/visibility_off:", key=f"unwatch-{job['id']}"):
+            db.update(db_conn(), job["id"], status="filtered", filter_reason="stopped watching while paused")
+            flash("success", f"{job['company']}: no longer watched.")
+            st.rerun()
+
+
+def unmatched_replies(events: list[sqlite3.Row], jobs: list[Job]) -> None:
+    st.caption(
+        "Replies that sounded like news about an application, but didn't name a company you're tracking. "
+        "Attach each to its job, or dismiss it."
+    )
+    choices = {j["id"]: f"{j['company']}: {j['title']}" for j in jobs if j["status"] in tracking.TRACKED}
+    for e in events:
+        with st.container(border=True):
+            st.markdown(f"**{EVENT_LABELS.get(e['kind'], e['kind'])}** :gray[· {day(e['at'])}]")
+            st.caption(md(f"{e['sender']}: {e['subject']}"))
+            if e["evidence"]:
+                st.caption(md(f"“{e['evidence']}”"))
+            with st.container(horizontal=True, vertical_alignment="bottom", gap="small"):
+                job_id = st.selectbox(
+                    "Job",
+                    list(choices),
+                    format_func=lambda i: md(choices[i]),
+                    index=None,
+                    placeholder="Which job is it about?",
+                    key=f"assign-{e['id']}",
+                    label_visibility="collapsed",
+                )
+                if st.button("Attach", key=f"attach-{e['id']}", type="primary", disabled=job_id is None):
+                    tracking.assign(db_conn(), e["id"], str(job_id))
+                    flash("success", f"Attached to {choices[str(job_id)]}.")
+                    st.rerun()
+                if st.button("Dismiss", key=f"dismiss-{e['id']}"):
+                    tracking.dismiss(db_conn(), e["id"])
+                    st.rerun()
+
+
+def latest(event: sqlite3.Row | None) -> str:
+    return "" if event is None else f"{EVENT_LABELS.get(event['kind'], event['kind'])}, {day(event['at'])}"
+
+
+def applications_table(jobs: list[Job]) -> pd.DataFrame:
+    sql = "SELECT job_id, kind, max(at) AS at FROM events WHERE job_id IS NOT NULL AND kind != 'other' GROUP BY job_id"
+    last = {r["job_id"]: r for r in db_conn().execute(sql)}
+    return pd.DataFrame(
+        [
+            {
+                "Company": j["company"],
+                "Role": j["title"],
+                "Status": STATUS_LABELS.get(j["status"], j["status"]),
+                "Applied": day(j["applied_at"]),
+                "Since": day(j["paused_at"]),
+                "Latest": latest(last.get(j["id"])),
+            }
+            for j in jobs
+        ]
+    )
+
+
+APPLICATION_VIEWS: dict[str, tuple[str, ...]] = {
+    "Active": ("applied", "interview", "offer"),
+    "Pending postings": ("paused",),
+    "Closed": ("hired", "not_selected"),
+}
+
+
+def applications_page() -> None:
+    show_flash()
+    everything = all_jobs()
+    unmatched = tracking.unmatched(db_conn())
+    groups = {name: [j for j in everything if j["status"] in statuses] for name, statuses in APPLICATION_VIEWS.items()}
+    with st.container(horizontal=True, gap="medium"):
+        for status in (*APPLICATION_STATUSES, "paused"):
+            st.metric(STATUS_LABELS[status], sum(j["status"] == status for j in everything), border=True)
+    options = [*groups, *(["Unmatched replies"] if unmatched else [])]
+    view = (
+        st.segmented_control(
+            "Show",
+            options,
+            default="Active",
+            required=True,
+            format_func=lambda g: f"{g} {len(groups[g]) if g in groups else len(unmatched)}",
+            label_visibility="collapsed",
+        )
+        or "Active"
+    )
+    if view == "Unmatched replies":
+        unmatched_replies(unmatched, everything)
+        return
+    shown = sorted(groups[view], key=lambda j: str(j["applied_at"] or j["paused_at"] or j["updated_at"]), reverse=True)
+    if not shown:
+        bodies = {
+            "Active": "Mark a resume applied, or let a confirmation email do it; replies move it on from there.",
+            "Pending postings": "Postings that are up but not taking applications land here and are rechecked.",
+            "Closed": "Applications that ended in a hire or a no show up here.",
+        }
+        empty_state("inbox", "gray", f"Nothing {view.lower()}", bodies[view])
+        return
+    left, right = st.columns([2, 1], gap="large")
+    with left:
+        hidden = ["Applied", "Latest"] if view == "Pending postings" else ["Since"]
+        picked = st.dataframe(
+            applications_table(shown).drop(columns=hidden),
+            hide_index=True,
+            height=min(MAX_TABLE_PX, ROW_PX * (len(shown) + 1) + 3),
+            on_select="rerun",
+            selection_mode="single-row",
+            key=f"applications-{view}",
+        )
+    with right:
+        if not (rows := picked.selection.rows):
+            empty_state("left_click", "blue", f"{len(shown)} jobs", "Select a row to see its history.")
+        elif view == "Pending postings":
+            pending_detail(shown[rows[0]])
+        else:
+            application_detail(shown[rows[0]])
+
+
 def needs_profile(page: Callable[[], None]) -> Callable[[], None]:
     """Wrap a page that can't work until the profile is saved."""
 
@@ -1071,6 +1277,9 @@ RESUMES_PAGE = st.Page(
     needs_profile(resumes_page), title="Resumes", icon=":material/description:", url_path="resumes", default=True
 )
 JOBS_PAGE = st.Page(needs_profile(jobs_page), title="Jobs", icon=":material/work:", url_path="jobs")
+APPLICATIONS_PAGE = st.Page(
+    needs_profile(applications_page), title="Applications", icon=":material/send:", url_path="applications"
+)
 PIPELINE_PAGE = st.Page(needs_profile(pipeline_page), title="Pipeline", icon=":material/settings:", url_path="pipeline")
 PROFILE_PAGE = st.Page(profile_page, title="Profile", icon=":material/person:", url_path="profile")
 
@@ -1087,6 +1296,6 @@ PAGE_CSS = """<style>
 [class*='st-key-open-'] button { opacity: 0; cursor: pointer; }
 </style>"""
 st.html(PAGE_CSS)
-page = st.navigation([RESUMES_PAGE, JOBS_PAGE, PIPELINE_PAGE, PROFILE_PAGE], position="top")
+page = st.navigation([RESUMES_PAGE, JOBS_PAGE, APPLICATIONS_PAGE, PIPELINE_PAGE, PROFILE_PAGE], position="top")
 status_line(link=page.title != PIPELINE_PAGE.title)
 page.run()

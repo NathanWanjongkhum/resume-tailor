@@ -30,7 +30,7 @@ from .paths import OUT
 
 log = logging.getLogger("tailor")
 
-STAGES = ("ingest", "filter", "fetch", "triage", "generate")
+STAGES = ("ingest", "track", "filter", "fetch", "triage", "recheck", "generate")
 
 _stop = threading.Event()
 

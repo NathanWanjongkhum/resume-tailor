@@ -5,10 +5,15 @@ goes, so any stage can be rerun alone and a stopped or crashed run resumes where
 left off::
 
     ingest   Gmail alert emails -> new jobs (deduped)
+    track    Gmail replies about applications -> applied | interview | offer | hired | not_selected
     filter   new jobs failing the hard filters in preferences -> filtered (no requests spent)
     fetch    new jobs without a posting -> full posting text (or the email summary)
     triage   new jobs -> filtered | triaged (with scores), best-ranked first, capped per run
+    recheck  paused postings (up, but not taking applications) -> back where they were | filtered
     generate best triaged jobs still open -> generated (tailored resume in out/)
+
+Postings found not taking applications at any step are paused rather than dropped,
+since some reopen; only a removed or expired posting counts as closed.
 """
 
 import fcntl
@@ -17,13 +22,13 @@ import sqlite3
 import subprocess
 from collections.abc import Callable, Generator
 from contextlib import contextmanager
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, cast
 
 import anthropic
 
-from . import company, db, gmail, llm, sources, triage
+from . import company, db, gmail, llm, sources, tracking, triage
 from .facts import Facts
 from .output import produce
 from .paths import DATA
@@ -47,7 +52,9 @@ JobError = (
     anthropic.APIError,
     sqlite3.Error,
 )
-REVIEWED = frozenset({"approved", "applied", "rejected"})
+REVIEWED = frozenset({"approved", "rejected", *tracking.RANK})
+PENDING_DAYS = 30  # default for tracking.pending_days
+GMAIL_STAGES = frozenset({"ingest", "track"})  # skipped by --skip-ingest; failures don't stop the run
 
 
 class AlreadyRunningError(RuntimeError):
@@ -115,6 +122,58 @@ def ingest_text(conn: sqlite3.Connection, msg: gmail.Message) -> int:
     return added
 
 
+def track(conn: sqlite3.Connection, prefs: triage.Prefs, facts: Facts, p: Progress | None = None) -> int:
+    """Read replies about tracked jobs from Gmail and move each job on. Returns status changes."""
+    p = p or Progress()
+    p.stage("track", None)
+    jobs = tracking.candidates(conn)
+    extra = str(prefs.get("tracking", {}).get("query") or "")
+    moved = 0
+    for query in tracking.queries(conn, jobs, extra):
+        on_total = cast("Callable[[int], None]", lambda n: p.stage("track", n))
+        for msg in gmail.messages(query, facts.raw["contact"]["email"], on_total=on_total):
+            p.item(msg.subject)
+            if not db.event_seen(conn, msg.message_id):
+                moved += tracking.record(conn, msg, jobs)
+            p.advance()
+    return moved
+
+
+def pause(conn: sqlite3.Connection, row: sqlite3.Row, **fields: object) -> None:
+    """Park a job whose posting is up but not taking applications, to recheck later."""
+    if row["status"] != "paused":
+        fields |= {"paused_from": row["status"], "paused_at": db.now()}
+    db.update(conn, row["id"], **fields, status="paused")
+    log.info("%s (%s) isn't taking applications; paused", row["id"], row["status"])
+
+
+def recheck(conn: sqlite3.Connection, prefs: triage.Prefs, p: Progress | None = None) -> int:
+    """Revisit paused postings: reopened ones go back where they were. Returns how many reopened."""
+    p = p or Progress()
+    rows = db.jobs(conn, "paused")
+    p.stage("recheck", len(rows))
+    days = int(prefs.get("tracking", {}).get("pending_days", PENDING_DAYS))
+    reopened = 0
+    for row in rows:
+        p.item(f"taking applications again? {_label(row)}")
+        reopened += recheck_one(conn, row, days) == "open"
+        p.advance()
+    return reopened
+
+
+def recheck_one(conn: sqlite3.Connection, row: sqlite3.Row, days: int = PENDING_DAYS) -> sources.PostingState | None:
+    """Look at one paused posting again and act on what it says."""
+    state = sources.posting_state(dict(row))
+    if state == "open":
+        db.update(conn, row["id"], status=row["paused_from"] or "new", paused_from=None, paused_at=None)
+        log.info("recheck: %s is taking applications again", row["id"])
+    elif state == "closed":
+        db.update(conn, row["id"], **sources.CLOSED)
+    elif state == "paused" and (row["paused_at"] or "") < (datetime.now(UTC) - timedelta(days=days)).isoformat():
+        db.update(conn, row["id"], status="filtered", filter_reason=f"not taking applications for {days}+ days")
+    return state
+
+
 def add_url(conn: sqlite3.Connection, url: str) -> str:
     """Add a single posting by URL (LinkedIn job link or any careers page)."""
     if m := sources.LINKEDIN_JOB_ID.search(url):
@@ -164,7 +223,10 @@ def fetch(conn: sqlite3.Connection, p: Progress | None = None) -> int:
             # Closed posting or unreadable page, and no email summary to fall back on.
             # Without this the job would be refetched on every run.
             fields |= {"status": "filtered", "filter_reason": error or "no posting text available"}
-        db.update(conn, row["id"], **fields, error=error)
+        if fields.get("status") == sources.PAUSED:
+            pause(conn, row, **{k: v for k, v in fields.items() if k != "status"}, error=error)
+        else:
+            db.update(conn, row["id"], **fields, error=error)
         done += 1
         p.advance()
     return done
@@ -257,7 +319,7 @@ def generate_one(
 
 
 def close_awaiting(conn: sqlite3.Connection, p: Progress) -> int:
-    """Filter out resumes you haven't applied with yet whose postings have since closed.
+    """Set aside resumes you haven't applied with yet whose postings closed or paused since.
 
     New-grad postings often close within days, before the resume is reviewed.
     """
@@ -266,10 +328,13 @@ def close_awaiting(conn: sqlite3.Connection, p: Progress) -> int:
     closed = 0
     for row in rows:
         p.item(f"still open? {_label(row)}")
-        if sources.still_open(dict(row)) is False:
+        state = sources.posting_state(dict(row))
+        if state == "closed":
             db.update(conn, row["id"], **sources.CLOSED)
             log.info("generate: %s (%s) closed before you applied", row["id"], row["status"])
-            closed += 1
+        elif state == "paused":
+            pause(conn, row)
+        closed += state in {"closed", "paused"}
         p.advance()
     return closed
 
@@ -293,12 +358,15 @@ def generate(conn: sqlite3.Connection, prefs: triage.Prefs, facts: Facts, p: Pro
         if (reason := triage.hard_filter(dict(row), prefs)) is not None:
             db.update(conn, row["id"], status="filtered", filter_reason=reason)
             continue
-        is_open = sources.still_open(dict(row))
-        if is_open is False:
+        state = sources.posting_state(dict(row))
+        if state == "closed":
             db.update(conn, row["id"], **sources.CLOSED)
             log.info("generate: %s closed since it was fetched; skipped", row["id"])
             continue
-        if is_open is None:  # couldn't read the page: try again next run rather than guess
+        if state == "paused":
+            pause(conn, row)
+            continue
+        if state is None:  # couldn't read the page: try again next run rather than guess
             log.warning("generate: couldn't check whether %s is still open; skipped this run", row["id"])
             continue
         tried += 1
@@ -339,23 +407,25 @@ def run(*, start: str = "ingest", skip_ingest: bool = False, trigger: str = "cli
         t = Tracker(conn, trigger=trigger, args=args)
         stages: dict[str, Callable[[], object]] = {
             "ingest": lambda: ingest(conn, prefs, facts, t),
+            "track": lambda: track(conn, prefs, facts, t),
             "filter": lambda: prefilter(conn, prefs, t),
             "fetch": lambda: fetch(conn, t),
             "triage": lambda: triage_new(conn, prefs, facts, t),
+            "recheck": lambda: recheck(conn, prefs, t),
             "generate": lambda: generate(conn, prefs, facts, t),
         }
         try:
             for name in STAGES[STAGES.index(start) :]:
-                if name == "ingest" and skip_ingest:
+                if name in GMAIL_STAGES and skip_ingest:
                     continue
                 try:
                     t.record(name, stages[name]())
                 except JobError as e:
-                    if name != "ingest":
+                    if name not in GMAIL_STAGES:
                         raise
                     # e.g. no app password yet: still process what's already queued
-                    log.exception("ingest failed")
-                    t.record("ingest_error", str(e).splitlines()[0])
+                    log.exception("%s failed", name)
+                    t.record(f"{name}_error", str(e).splitlines()[0])
         except (StopRequestedError, KeyboardInterrupt):
             log.info("run stopped on request: %s", t.stats)
             t.finish("stopped")

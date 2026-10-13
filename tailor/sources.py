@@ -15,7 +15,7 @@ import urllib.request
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from html.parser import HTMLParser
-from typing import Any, ClassVar, cast, override
+from typing import Any, ClassVar, Literal, cast, override
 
 Lead = dict[str, Any]
 
@@ -25,6 +25,15 @@ HOST_DELAY = 3.0  # seconds between requests to one host; LinkedIn 429s on burst
 HTTP_TOO_MANY_REQUESTS = 429
 CARD_FIELDS = ("title", "company", "location")
 CLOSED = {"status": "filtered", "filter_reason": "posting closed"}
+# The posting is still up but not taking applications; these get rechecked, and some reopen.
+PAUSED = "paused"
+_NOT_ACCEPTING = re.compile(
+    r"no longer accepting applications|not (?:currently )?accepting (?:new )?applications"
+    r"|applications? (?:are|is) (?:currently )?(?:paused|on hold)|(?:hiring|recruiting) (?:is )?(?:currently )?paused"
+    r"|(?:position|role|job) is (?:currently )?on hold",
+    re.IGNORECASE,
+)
+PostingState = Literal["open", "paused", "closed"]
 HTTP_GONE = frozenset({404, 410})
 _AGO = re.compile(r"(\d+)\s+(minute|hour|day|week|month|year)s?\s+ago")
 _AGO_DAYS = {"minute": 1 / 1440, "hour": 1 / 24, "day": 1, "week": 7, "month": 30, "year": 365}
@@ -223,9 +232,6 @@ def fetch_linkedin(job_id: str) -> Lead:
     desc = re.search(r"show-more-less-html__markup[^>]*>(.*?)</div>", page, re.DOTALL)
     criteria = re.findall(r'job-criteria-subheader">\s*(.*?)\s*</h3>\s*<span[^>]*>\s*(.*?)\s*</span>', page, re.DOTALL)
     header = "\n".join(f"{k.strip()}: {html.unescape(v.strip())}" for k, v in criteria)
-    # Closed jobs keep their full description; only this banner says they're closed.
-    if "closed-job" in page:
-        return dict(CLOSED)
     posted_at = None
     if ago := _AGO.search(grab(r"posted-time-ago__text[^>]*>(.*?)</span>") or ""):
         days = int(ago.group(1)) * _AGO_DAYS[ago.group(2)]
@@ -236,6 +242,9 @@ def fetch_linkedin(job_id: str) -> Lead:
         "company": grab(r"topcard__org-name-link[^>]*>(.*?)</a>") or grab(r'topcard__flavor">(.*?)</span>'),
         "location": grab(r'topcard__flavor topcard__flavor--bullet">(.*?)</span>'),
         "posting": (header + "\n\n" + html_to_text(desc.group(1))).strip() if desc else None,
+        # "No longer accepting applications": the page and description stay up and only
+        # this banner says so, so it's rechecked rather than dropped. Removed jobs 404.
+        "status": PAUSED if "closed-job" in page else None,
     }
 
 
@@ -297,7 +306,7 @@ def fetch_generic(url: str) -> Lead:
         final_url, page = http_get(url)
     except urllib.error.HTTPError as e:
         return dict(CLOSED) if e.code in HTTP_GONE else {"url": e.url}
-    out: Lead = {"url": final_url}
+    out: Lead = {"url": final_url, "status": PAUSED if _NOT_ACCEPTING.search(html_to_text(page)) else None}
     if (ld := _json_ld_posting(page)) is not None:
         if (until := _ld_date(ld.get("validThrough"))) is not None and until < datetime.now(UTC):
             return dict(CLOSED)
@@ -317,7 +326,7 @@ def fetch_generic(url: str) -> Lead:
 
 
 def fetch_posting(job: Lead) -> Lead:
-    """Fields to update on the job, including posting_ok."""
+    """Fields to update on the job, including posting_ok, and status if it's closed or paused."""
     if job["source"] == "linkedin":
         got = fetch_linkedin(job["id"].split(":", 1)[1])
     else:
@@ -340,12 +349,14 @@ def fetch_posting(job: Lead) -> Lead:
     return {**merged, "posting_ok": int(ok)}
 
 
-def still_open(job: Lead) -> bool | None:
-    """Whether the posting still takes applications; None if the page couldn't be read."""
+def posting_state(job: Lead) -> PostingState | None:
+    """Whether the posting takes applications, is paused, or is gone; None if the page couldn't be read."""
     try:
         got = fetch_posting(job)
     except urllib.error.HTTPError as e:
-        return False if e.code in HTTP_GONE else None
+        return "closed" if e.code in HTTP_GONE else None
     except (OSError, ValueError):
         return None
-    return bool(got.get("status") != "filtered")
+    if got.get("status") == "filtered":
+        return "closed"
+    return "paused" if got.get("status") == PAUSED else "open"

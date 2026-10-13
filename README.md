@@ -7,6 +7,8 @@ and a deterministic checker rejects anything it can't trace back.
 ```
 Gmail alerts ─► ingest ─► fetch posting ─► triage ─► generate ─► dashboard review
  (IMAP, read-only)  (dedupe)  (LinkedIn/ATS)  (filters + score)  (tailor, check, fit)
+Gmail replies ─► track: applied → interview → offer → hired | not selected
+Paused postings ─► recheck: reopened → back in line | gone → filtered
                          all state in data/jobs.db (SQLite)
 ```
 
@@ -23,6 +25,9 @@ Gmail alerts ─► ingest ─► fetch posting ─► triage ─► generate �
   then skill rows and projects are trimmed until it fits.
 - **Resumable runs.** Each stage commits per job and only picks up pending work,
   so a stopped, killed or crashed run resumes where it left off.
+- **Follows up for you.** Replies in Gmail move applications through interview,
+  offer, hired or not selected, and postings that stop taking applications are
+  watched until they reopen (see [Applications](#applications)).
 
 ## Files
 
@@ -98,6 +103,34 @@ Checks: `uv run ruff check . && uv run ruff format --check . && uv run ty check 
 
 Logs: `journalctl --user -u resume-tailor` (timer runs) and `-u resume-tailor-manual`
 (runs started from the dashboard).
+
+## Applications
+
+The dashboard's Applications page follows each job after its resume, with counts
+per stage and a history per job. Two stages of every run keep it current, with no
+Claude calls:
+
+- **Check replies** (`track`) searches Gmail, read-only, for emails naming the
+  company of a job you have a resume for or applied to (since the last one read),
+  sorts each by fixed phrases (application received, interview, offer, hired, not
+  selected), matches it to the job by sender, subject or body, and records it. A
+  reply only moves a job forward: a late confirmation never undoes an interview.
+  A confirmation for a resume you hadn't marked applied marks it. Replies that
+  sound like news but name no tracked company wait under *Unmatched replies* for
+  you to attach or dismiss, and *Set status* corrects anything misread.
+- **Recheck pending** (`recheck`): a posting that's still up but not taking
+  applications (LinkedIn's "No longer accepting applications", or a careers page
+  that says so) is set aside as *Pending* instead of being dropped, and checked
+  again every run. If it reopens, the job goes back to where it was; if it's
+  removed, or still paused after `tracking.pending_days` (30), it's filtered out.
+
+Both read an optional `tracking` section in your preferences (see the example).
+From the command line:
+
+    uv run python -m tailor track                 # read replies now
+    uv run python -m tailor recheck               # recheck pending postings now
+    uv run python -m tailor replies <job id>      # a job's history
+    uv run python -m tailor mark <job id> interview   # set a status by hand
 
 ## Runs: progress, stopping, recovery
 

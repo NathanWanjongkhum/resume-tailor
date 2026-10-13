@@ -332,34 +332,72 @@ def test_years_required() -> None:
     assert hard_filter({**job, "posting": "- 0-2 years of experience"}, prefs) is None
 
 
-def test_generate_drops_awaiting_jobs_whose_posting_closed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_generate_sets_aside_awaiting_jobs_whose_posting_closed_or_paused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     conn = db.connect(tmp_path / "jobs.db")
-    for n, status in [(1, "generated"), (2, "approved"), (3, "applied")]:
+    for n, status in [(1, "generated"), (2, "approved"), (3, "applied"), (4, "approved")]:
         db.add_job(conn, id=f"t:{n}", source="test", title=f"Dev {n}", company="A", posting="x", posting_ok=1)
         db.update(conn, f"t:{n}", status=status)
-    monkeypatch.setattr(sources, "still_open", lambda job: job["id"] == "t:2")
+    states = {"t:1": "closed", "t:2": "open", "t:4": "paused"}
+    monkeypatch.setattr(sources, "posting_state", lambda job: states[job["id"]])
     pipeline.generate(conn, load_prefs(), Facts())
-    assert [db.get_required(conn, f"t:{n}")["status"] for n in (1, 2, 3)] == ["filtered", "approved", "applied"]
+    got = [db.get_required(conn, f"t:{n}")["status"] for n in (1, 2, 3, 4)]
+    assert got == ["filtered", "approved", "applied", "paused"]
+    assert db.get_required(conn, "t:4")["paused_from"] == "approved"
 
 
-def test_closed_linkedin_posting_is_filtered(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_linkedin_banner_pauses_rather_than_closes(monkeypatch: pytest.MonkeyPatch) -> None:
     page = '<h2 class="top-card-layout__title">Dev</h2><figure class="closed-job">No longer accepting applications'
     monkeypatch.setattr(sources, "http_get", lambda _url: ("", page))
     job = {"id": "linkedin:1", "source": "linkedin"}
-    assert sources.fetch_posting(job) == sources.CLOSED
-    assert sources.still_open(job) is False
+    assert sources.fetch_posting(job)["status"] == sources.PAUSED
+    assert sources.posting_state(job) == "paused"
+
+
+def test_generic_page_not_accepting_applications_is_paused(monkeypatch: pytest.MonkeyPatch) -> None:
+    page = "<html><body><h1>Software Engineer</h1><p>We are not currently accepting applications.</p></body></html>"
+    monkeypatch.setattr(sources, "http_get", lambda url: (url, page))
+    assert sources.posting_state({"id": "manual:1", "source": "manual", "url": "https://example.com/j"}) == "paused"
+
+
+def test_fetch_pauses_new_jobs_and_keeps_the_posting(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    conn = db.connect(tmp_path / "jobs.db")
+    db.add_job(conn, id="t:1", source="test", title="Dev", company="A", url="https://example.com/j")
+    fields = {"posting": "x" * 700, "posting_ok": 1, "status": sources.PAUSED}
+    monkeypatch.setattr(sources, "fetch_posting", lambda _job: dict(fields))
+    pipeline.fetch(conn)
+    row = db.get_required(conn, "t:1")
+    assert (row["status"], row["paused_from"], row["posting_ok"]) == ("paused", "new", 1)
 
 
 def test_generate_skips_closed_postings_and_fills_the_cap(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     conn = db.connect(tmp_path / "jobs.db")
-    for n, rel in [(1, 5), (2, 4), (3, 3)]:
+    for n, rel in [(1, 5), (2, 4), (3, 3), (4, 3)]:
         db.add_job(conn, id=f"t:{n}", source="test", title=f"Dev {n}", company="A", posting="x", posting_ok=1)
         db.update(conn, f"t:{n}", status="triaged", relevance=rel, desirability=3)
-    monkeypatch.setattr(sources, "still_open", lambda job: job["id"] != "t:1")
+    states = {"t:1": "closed", "t:2": "paused"}
+    monkeypatch.setattr(sources, "posting_state", lambda job: states.get(job["id"], "open"))
     made: list[str] = []
     monkeypatch.setattr(pipeline, "generate_one", lambda _conn, job_id, *_args: made.append(job_id))
     prefs = load_prefs()
     prefs["generate"]["max_per_run"] = 2
     assert pipeline.generate(conn, prefs, Facts()) == 2
-    assert made == ["t:2", "t:3"]  # the best job closed, so the next two were written
+    assert made == ["t:3", "t:4"]  # the best job closed and the next paused, so the next two were written
     assert db.get_required(conn, "t:1")["filter_reason"] == "posting closed"
+    assert db.get_required(conn, "t:2")["status"] == "paused"
+
+
+def test_recheck_reopens_closes_and_gives_up(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    conn = db.connect(tmp_path / "jobs.db")
+    for n in range(1, 5):
+        db.add_job(conn, id=f"t:{n}", source="test", title=f"Dev {n}", company="A", posting="x", posting_ok=1)
+        db.update(conn, f"t:{n}", status="paused", paused_from="triaged", paused_at=db.now())
+    db.update(conn, "t:4", paused_at="2026-01-01T00:00:00+00:00")
+    states = {"t:1": "open", "t:2": "closed", "t:3": "paused", "t:4": "paused"}
+    monkeypatch.setattr(sources, "posting_state", lambda job: states[job["id"]])
+    assert pipeline.recheck(conn, load_prefs()) == 1
+    rows = [db.get_required(conn, f"t:{n}") for n in range(1, 5)]
+    assert [r["status"] for r in rows] == ["triaged", "filtered", "paused", "filtered"]
+    assert rows[0]["paused_at"] is None
+    assert rows[3]["filter_reason"] == "not taking applications for 30+ days"

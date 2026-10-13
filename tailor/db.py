@@ -6,6 +6,12 @@ Job status flow::
     new -> triaged -> generated -> approved -> applied
     any reviewable state -> rejected
     any -> error                         (see the `error` column; retried next run)
+
+    new | triaged | generated | approved -> paused     (posting up, not taking applications)
+    paused -> the status it had | filtered             (reopened | gone or paused too long)
+
+    applied -> interview -> offer -> hired             (from replies in Gmail, or set by hand)
+    applied | interview -> not_selected                (the employer turned you down)
 """
 
 import hashlib
@@ -47,6 +53,9 @@ CREATE TABLE IF NOT EXISTS jobs (
     attempts      INTEGER DEFAULT 0,       -- failed generation attempts; capped by MAX_ATTEMPTS
     email_id      TEXT,
     posted_at     TEXT,                    -- UTC ISO; from the source, else the alert email's date
+    paused_from   TEXT,                    -- status to go back to if a paused posting reopens
+    paused_at     TEXT,                    -- when the posting stopped taking applications
+    applied_at    TEXT,
     found_at      TEXT NOT NULL,
     updated_at    TEXT NOT NULL
 );
@@ -60,6 +69,20 @@ CREATE TABLE IF NOT EXISTS emails (
     jobs_found  INTEGER,
     seen_at     TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS events (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    job_id      TEXT,                    -- NULL for a reply no tracked job matched
+    kind        TEXT NOT NULL,           -- see tracking.KINDS; 'other' marks an email as read
+    source      TEXT NOT NULL,           -- email | manual
+    message_id  TEXT UNIQUE,
+    sender      TEXT,
+    subject     TEXT,
+    evidence    TEXT,                    -- the sentence the kind was read from
+    at          TEXT NOT NULL,           -- when it happened (the email's date)
+    recorded_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS events_job ON events(job_id);
 
 CREATE TABLE IF NOT EXISTS runs (
     id               INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -93,7 +116,21 @@ CREATE TABLE IF NOT EXISTS profile_history (
 );
 """
 
-STATUSES = ["new", "filtered", "triaged", "generated", "approved", "applied", "rejected", "error"]
+STATUSES = [
+    "new",
+    "filtered",
+    "triaged",
+    "generated",
+    "approved",
+    "paused",
+    "applied",
+    "interview",
+    "offer",
+    "hired",
+    "not_selected",
+    "rejected",
+    "error",
+]
 _JOBS_DDL = SCHEMA.split("CREATE TABLE IF NOT EXISTS emails", maxsplit=1)[0]
 _COLUMN_DDL = dict(re.findall(r"^    (\w+)\s+([A-Z][^,\n]*?),?\s*(?:--.*)?$", _JOBS_DDL, re.MULTILINE))
 COLUMNS = frozenset(_COLUMN_DDL)
@@ -194,3 +231,32 @@ def mark_email(  # noqa: PLR0913
         (message_id, sender, subject, received_at, jobs_found, now()),
     )
     conn.commit()
+
+
+def add_event(  # noqa: PLR0913
+    conn: sqlite3.Connection,
+    job_id: str | None,
+    kind: str,
+    *,
+    source: str = "manual",
+    at: str | None = None,
+    message_id: str | None = None,
+    sender: str | None = None,
+    subject: str | None = None,
+    evidence: str | None = None,
+) -> None:
+    conn.execute(
+        "INSERT OR IGNORE INTO events (job_id, kind, source, message_id, sender, subject, evidence, at, recorded_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (job_id, kind, source, message_id, sender, subject, evidence, at or now(), now()),
+    )
+    conn.commit()
+
+
+def events(conn: sqlite3.Connection, job_id: str) -> list[sqlite3.Row]:
+    cur = conn.execute("SELECT * FROM events WHERE job_id = ? AND kind != 'other' ORDER BY at DESC, id DESC", (job_id,))
+    return cast("list[sqlite3.Row]", cur.fetchall())
+
+
+def event_seen(conn: sqlite3.Connection, message_id: str) -> bool:
+    return conn.execute("SELECT 1 FROM events WHERE message_id = ?", (message_id,)).fetchone() is not None
