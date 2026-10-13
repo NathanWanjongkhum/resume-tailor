@@ -1469,7 +1469,25 @@ PROFILE_PAGE = st.Page(profile_page, title="Profile", icon=":material/person:", 
 # Less empty space above the content than Streamlit's default, the status line up in the
 # navigation bar when there's room beside the links, and a highlight for the
 # selected resume card (its container key starts with "picked-").
+#
+# Also a loading bar along the top while the app is working: Streamlit shows nothing
+# then with the toolbar minimal, so slower redraws (the Profile page, after an edit)
+# felt like a stall. It waits 250ms before showing, so quick reruns, such as the
+# Pipeline panel refreshing every 2 seconds, never flash it.
 PAGE_CSS = """<style>
+.stApp::after {
+  content: ""; position: fixed; top: 0; left: 0; right: 0; height: 3px; z-index: 999992;
+  pointer-events: none; opacity: 0; transition: opacity 150ms ease-out;
+  background: linear-gradient(90deg, transparent, #2563eb, transparent) no-repeat;
+  background-size: 40% 100%;
+}
+.stApp[data-test-script-state='running']::after {
+  opacity: 1; transition-delay: 250ms; animation: loading-bar 1.1s ease-in-out infinite;
+}
+@keyframes loading-bar { from { background-position: -70% 0; } to { background-position: 170% 0; } }
+@media (prefers-reduced-motion: reduce) {
+  .stApp[data-test-script-state='running']::after { animation: none; background: #93c5fd; }
+}
 [data-testid='stMainBlockContainer'] { padding-top: 4rem; }
 @media (min-width: 1000px) {
   [class*='st-key-status-line'] { position: fixed; top: 1.05rem; right: 1.5rem; width: auto; z-index: 999991; }
