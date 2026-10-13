@@ -59,6 +59,13 @@ def test_replies_move_applications_forward_only(tmp_path: Path) -> None:
     assert db.get_required(conn, "t:2")["status"] == "applied"
 
 
+def test_a_reply_dates_an_application_marked_before_dates_were_kept(tmp_path: Path) -> None:
+    conn = db.connect(tmp_path / "jobs.db")
+    db.add_job(conn, id="t:1", source="test", title="Data Engineer", company="Globex", status="applied")
+    assert not reply(conn, 1, "Globex <jobs@globex.com>", "Thank you for applying", "Thank you for applying.")
+    assert db.get_required(conn, "t:1")["applied_at"] == "2026-10-01T10:00:00+00:00"
+
+
 def test_unmatched_reply_can_be_assigned(tmp_path: Path) -> None:
     conn = db.connect(tmp_path / "jobs.db")
     db.add_job(conn, id="t:1", source="test", title="Dev", company="Globex", status="applied")

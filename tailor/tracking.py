@@ -187,6 +187,9 @@ def match(msg: Message, jobs: list[sqlite3.Row]) -> sqlite3.Row | None:
 def advance(conn: sqlite3.Connection, job: sqlite3.Row, status: str, at: str | None = None) -> bool:
     """Move a job to `status` if that's further along than where it is. Returns True if moved."""
     if RANK[status] <= RANK.get(job["status"], 0):
+        # Jobs marked applied before applied_at existed get their date from the first reply.
+        if job["status"] in RANK and not job["applied_at"]:
+            db.update(conn, job["id"], applied_at=at or db.now())
         return False
     fields: dict[str, object] = {"status": status}
     if not job["applied_at"]:
