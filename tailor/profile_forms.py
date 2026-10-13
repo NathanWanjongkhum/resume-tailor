@@ -6,11 +6,11 @@ Widget keys carry a form version that the dashboard bumps whenever the draft cha
 shape (an entry added, moved or removed, or the YAML edited directly), so widgets
 restart from the draft then; plain value edits keep their widgets.
 
-The facts have well over a hundred widgets, nearly all inside entry cards, so a card
-renders its contents only while open; everything else (tabs, popovers) renders up
-front, so switching and opening them is instant instead of showing an empty frame.
-Text boxes get a height up front rather than sizing themselves after they appear,
-which shifted the page on every rerun.
+Everything renders up front, closed cards and other tabs included, so opening and
+switching happen in the browser at once; rendering a card's contents only once it
+opened made it open empty and then jump as they arrived. Text boxes get a height up
+front rather than sizing themselves after they appear, which shifted the page on
+every rerun.
 """
 
 from collections.abc import Callable
@@ -97,20 +97,6 @@ def text_height(text: str) -> int:
     """A text box height that fits `text`."""
     lines = sum(max(1, -(-len(line) // LINE_CHARS)) for line in text.splitlines() or [""])
     return max(MIN_TEXT_PX, LINE_PX * lines + PADDING_PX)
-
-
-def card(label: str, key: str) -> Any:  # noqa: ANN401
-    """An expander that reruns when opened or closed, so its contents can render only while open.
-
-    The label is part of an expander's identity, so it must not change with the contents
-    (a claim count would close the card whenever a claim is added or removed).
-    """
-    return st.expander(label, key=key, on_change="rerun")
-
-
-def is_open(container: Any) -> bool:  # noqa: ANN401
-    """Whether a lazy card is open; None means it isn't tracked, so render it."""
-    return container.open is not False
 
 
 def _text(value: object) -> str | None:
@@ -244,10 +230,9 @@ def entry_card(form: Form, doc: CommentedMap, section: str, i: int, skills: list
     what, details = ENTRIES[section]
     title = " · ".join(str(entry.get(k)) for k, _, _ in details[:2] if entry.get(k) and k != "repo")
     claims = entry.get("claims") or []
-    box = card(md(title or entry["id"]), f"pf-open-{section}-{entry['id']}")
-    with box:
-        if not is_open(box):
-            return
+    # The label is part of an expander's identity, so a claim count in it would close the
+    # card whenever a claim is added or removed.
+    with st.expander(md(title or entry["id"]), key=f"pf-open-{section}-{entry['id']}"):
         cols = st.columns(2)
         for n, (key, label, placeholder) in enumerate(details):
             with cols[n % 2]:
@@ -384,10 +369,7 @@ def education_tab(form: Form, doc: CommentedMap) -> None:
     schools = doc.get("education") or []
     for i, school in enumerate(schools):
         path: Path = ("education", i)
-        box = card(md(school.get("school") or "School"), f"pf-open-education-{i}")
-        with box:
-            if not is_open(box):
-                continue
+        with st.expander(md(school.get("school") or "School"), key=f"pf-open-education-{i}"):
             cols = st.columns(2)
             for n, (key, label, placeholder) in enumerate(EDUCATION):
                 with cols[n % 2]:

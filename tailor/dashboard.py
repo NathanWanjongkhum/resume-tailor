@@ -1246,15 +1246,6 @@ def github_card() -> None:
             st.rerun()
 
 
-# An entry card's contents arrive just after it opens (they render only while open), so
-# fade them in rather than having them pop in.
-PROFILE_CSS = """<style>
-@keyframes pf-arrive { from { opacity: 0; transform: translateY(-3px); } to { opacity: 1; transform: none; } }
-[data-testid='stExpanderDetails'] > * { animation: pf-arrive 160ms ease-out; }
-@media (prefers-reduced-motion: reduce) { [data-testid='stExpanderDetails'] > * { animation: none; } }
-</style>"""
-
-
 def profile_page() -> None:
     show_flash()
     if missing := missing_profile():
@@ -1262,7 +1253,6 @@ def profile_page() -> None:
             f"Set up your {' and '.join(missing)} to start: the other pages work once both are saved. "
             "Each change is checked and shown to you before it's saved."
         )
-    st.html(PROFILE_CSS)
     facts, prefs, evidence = st.tabs(["Facts", "Preferences", "GitHub"], key="profile-tabs")
     with facts:
         profile_card("facts")
