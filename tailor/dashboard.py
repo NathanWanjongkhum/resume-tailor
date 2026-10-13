@@ -308,7 +308,8 @@ def empty_state(icon: str, color: str, title: str, body: str) -> DeltaGenerator:
 def job_heading(job: Job) -> None:
     st.markdown(f"### {md(job['title'])}")
     pay = f" · {job['salary']}" if job["salary"] else ""
-    st.caption(md(f"{job['company'] or 'Unknown company'} · {job['location'] or 'Location not listed'}{pay}"))
+    where = short_location(job["location"]) or "Location not listed"
+    st.caption(md(f"{job['company'] or 'Unknown company'} · {where}{pay}"))
 
 
 @st.fragment(run_every=3)
@@ -375,7 +376,7 @@ def resume_actions(job: Job, pdf: Path) -> None:
         if job["status"] == "generated" and st.button("Approve", icon=":material/check:"):
             set_status(job, "approved")
         if (link := safe_link(job)) is not None:
-            st.link_button("Posting", link, icon=":material/open_in_new:")
+            st.link_button("Open posting", link, icon=":material/open_in_new:")
         if job["status"] != "rejected" and st.button("Reject", icon=f":material/{STATUS_ICONS['rejected']}:"):
             set_status(job, "rejected")
         with st.popover("More", icon=":material/more_horiz:"):
@@ -578,7 +579,7 @@ def job_detail(job: Job) -> None:
         ):
             write_resume(job)
         if (link := safe_link(job)) is not None:
-            st.link_button("Posting", link, icon=":material/open_in_new:")
+            st.link_button("Open posting", link, icon=":material/open_in_new:")
         if job["status"] not in {"rejected", "filtered"} and st.button("Not interested", icon=":material/block:"):
             set_status(job, "rejected")
     with st.expander("Posting text"):
@@ -609,7 +610,7 @@ def jobs_page() -> None:
             3,
             15,
             9,
-            format="Score ≥ %d",
+            format="Fit + want + fresh ≥ %d",
             width=240,
             disabled=view == "Filtered out",
             label_visibility="collapsed",
@@ -660,11 +661,27 @@ def jobs_page() -> None:
             empty_state("left_click", "blue", f"{len(shown)} jobs", body)
 
 
+US_STATES = {
+    "Alabama": "AL", "Alaska": "AK", "Arizona": "AZ", "Arkansas": "AR", "California": "CA", "Colorado": "CO",
+    "Connecticut": "CT", "Delaware": "DE", "Florida": "FL", "Georgia": "GA", "Hawaii": "HI", "Idaho": "ID",
+    "Illinois": "IL", "Indiana": "IN", "Iowa": "IA", "Kansas": "KS", "Kentucky": "KY", "Louisiana": "LA",
+    "Maine": "ME", "Maryland": "MD", "Massachusetts": "MA", "Michigan": "MI", "Minnesota": "MN",
+    "Mississippi": "MS", "Missouri": "MO", "Montana": "MT", "Nebraska": "NE", "Nevada": "NV",
+    "New Hampshire": "NH", "New Jersey": "NJ", "New Mexico": "NM", "New York": "NY", "North Carolina": "NC",
+    "North Dakota": "ND", "Ohio": "OH", "Oklahoma": "OK", "Oregon": "OR", "Pennsylvania": "PA",
+    "Rhode Island": "RI", "South Carolina": "SC", "South Dakota": "SD", "Tennessee": "TN", "Texas": "TX",
+    "Utah": "UT", "Vermont": "VT", "Virginia": "VA", "Washington": "WA", "West Virginia": "WV",
+    "Wisconsin": "WI", "Wyoming": "WY", "District of Columbia": "DC",
+}  # fmt: skip
+
+
 def short_location(location: str | None) -> str:
-    """LinkedIn spells out the country on nearly every job; drop it so the city fits."""
+    """LinkedIn spells out the country and state on nearly every job; shorten them so the city fits."""
     if location is None:
         return ""
-    return re.sub(r",\s*United States$", "", location).replace("United States", "US")
+    location = re.sub(r",\s*United States$", "", location).replace("United States", "US")
+    city, _, state = location.rpartition(", ")
+    return f"{city}, {US_STATES[state]}" if city and state in US_STATES else location
 
 
 def jobs_table(jobs: list[Job], *, with_status: bool) -> Styler:
@@ -1181,7 +1198,7 @@ def application_detail(job: Job) -> None:
             st.session_state["selected_resume"] = job["id"]
             st.switch_page(RESUMES_PAGE)
         if (link := safe_link(job)) is not None:
-            st.link_button("Posting", link, icon=":material/open_in_new:")
+            st.link_button("Open posting", link, icon=":material/open_in_new:")
         with st.popover("Set status", icon=":material/edit:"):
             st.caption("Replies only move an application forward. Fix a misread one here.")
             for status in APPLICATION_STATUSES:
@@ -1212,7 +1229,7 @@ def pending_detail(job: Job) -> None:
             flash("info", f"{job['company']}: {outcome.get(state or '', 'still not taking applications')}.")
             st.rerun()
         if (link := safe_link(job)) is not None:
-            st.link_button("Posting", link, icon=":material/open_in_new:")
+            st.link_button("Open posting", link, icon=":material/open_in_new:")
         if st.button("Stop watching", icon=":material/visibility_off:", key=f"unwatch-{job['id']}"):
             db.update(db_conn(), job["id"], status="filtered", filter_reason="stopped watching while paused")
             flash("success", f"{job['company']}: no longer watched.")
@@ -1257,13 +1274,16 @@ def latest(event: sqlite3.Row | None) -> str:
 def applications_table(jobs: list[Job]) -> pd.DataFrame:
     sql = "SELECT job_id, kind, max(at) AS at FROM events WHERE job_id IS NOT NULL AND kind != 'other' GROUP BY job_id"
     last = {r["job_id"]: r for r in db_conn().execute(sql)}
+    # Jobs marked applied before applied_at existed: their first reply is the best date there is.
+    sql = "SELECT job_id, min(at) AS at FROM events WHERE job_id IS NOT NULL GROUP BY job_id"
+    first = {r["job_id"]: r["at"] for r in db_conn().execute(sql)}
     return pd.DataFrame(
         [
             {
                 "Company": j["company"],
                 "Role": j["title"],
                 "Status": STATUS_LABELS.get(j["status"], j["status"]),
-                "Applied": day(j["applied_at"]),
+                "Applied": day(j["applied_at"] or first.get(j["id"])),
                 "Since": day(j["paused_at"]),
                 "Latest": latest(last.get(j["id"])),
             }
@@ -1284,9 +1304,8 @@ def applications_page() -> None:
     everything = all_jobs()
     unmatched = tracking.unmatched(db_conn())
     groups = {name: [j for j in everything if j["status"] in statuses] for name, statuses in APPLICATION_VIEWS.items()}
-    with st.container(horizontal=True, gap="medium"):
-        for status in (*APPLICATION_STATUSES, "paused"):
-            st.metric(STATUS_LABELS[status], sum(j["status"] == status for j in everything), border=True)
+    counts = [f"{STATUS_LABELS[s]} **{sum(j['status'] == s for j in everything)}**" for s in APPLICATION_STATUSES]
+    st.markdown(f":gray[{' · '.join(counts)}]")
     options = [*groups, *(["Unmatched replies"] if unmatched else [])]
     view = (
         st.segmented_control(
