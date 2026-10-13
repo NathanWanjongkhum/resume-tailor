@@ -312,7 +312,7 @@ def job_heading(job: Job) -> None:
 
 
 @st.fragment(run_every=3)
-def status_line(*, link: bool) -> None:
+def status_line() -> None:
     """One line on every page: live progress while running, else the last and next run."""
     conn = db_conn()
     progress.recover(conn, clean_partials=False)
@@ -336,8 +336,6 @@ def status_line(*, link: bool) -> None:
         horizontal=True, vertical_alignment="center", horizontal_alignment="right", gap="medium", key="status-line"
     ):
         st.markdown(text, width="content")
-        if link:
-            st.page_link(PIPELINE_PAGE, label="Pipeline", icon=":material/arrow_forward:", width="content")
 
 
 def resume_card(job: Job, *, selected: bool) -> None:
@@ -1377,5 +1375,5 @@ PAGE_CSS = """<style>
 </style>"""
 st.html(PAGE_CSS)
 page = st.navigation([RESUMES_PAGE, JOBS_PAGE, APPLICATIONS_PAGE, PIPELINE_PAGE, PROFILE_PAGE], position="top")
-status_line(link=page.title != PIPELINE_PAGE.title)
+status_line()
 page.run()
